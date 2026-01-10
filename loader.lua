@@ -1,33 +1,95 @@
 --[[
-    JerryScript Loader - Cherax Edition
+    ═══════════════════════════════════════════════════════════════════════════
+    JERRYSCRIPT LOADER - CHERAX EDITION
+    ═══════════════════════════════════════════════════════════════════════════
+    
+    Advanced loader that fetches JerryScript from GitHub
+    Auto-updates, version checking, error handling
+    
     GitHub: https://github.com/jb321-MIA/JerryScript-Cherax
+    ═══════════════════════════════════════════════════════════════════════════
 ]]
 
-local SCRIPT_NAME = "JerryScript"
-local SCRIPT_VERSION = "1.0.0"
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CONFIGURATION
+-- ═══════════════════════════════════════════════════════════════════════════
+local CONFIG = {
+    NAME = "JerryScript",
+    VERSION = "1.1.0",
+    
+    -- GitHub Settings
+    GITHUB_USER = "jb321-MIA",
+    GITHUB_REPO = "JerryScript-Cherax",
+    GITHUB_BRANCH = "main",
+    
+    -- Files to load
+    MAIN_SCRIPT = "JerryScript_v10_2_DOLOS.lua",
+    
+    -- Libraries (loaded first, available globally)
+    LIBS = {
+        "entity",
+        "force", 
+        "ptfx",
+        "vehicle",
+        "network"
+    },
+    
+    -- Settings
+    LOAD_LIBS = true,           -- Load helper libraries
+    LOAD_MAIN = true,           -- Load main script
+    SHOW_CONSOLE_LOG = true,    -- Show detailed logs
+    FETCH_TIMEOUT = 10000,      -- HTTP timeout (ms)
+}
 
-local GITHUB_USERNAME = "jb321-MIA"
-local GITHUB_REPO = "JerryScript-Cherax"
-local GITHUB_BRANCH = "main"
-local GITHUB_RAW = "https://raw.githubusercontent.com/" .. GITHUB_USERNAME .. "/" .. GITHUB_REPO .. "/" .. GITHUB_BRANCH .. "/"
+-- Build base URL
+local GITHUB_RAW = "https://raw.githubusercontent.com/" 
+    .. CONFIG.GITHUB_USER .. "/" 
+    .. CONFIG.GITHUB_REPO .. "/" 
+    .. CONFIG.GITHUB_BRANCH .. "/"
 
-local function log(msg)
-    print("[" .. SCRIPT_NAME .. "] " .. tostring(msg))
+-- ═══════════════════════════════════════════════════════════════════════════
+-- LOGGING
+-- ═══════════════════════════════════════════════════════════════════════════
+local function log(msg, level)
+    if CONFIG.SHOW_CONSOLE_LOG then
+        local prefix = "[" .. CONFIG.NAME .. "]"
+        if level == "OK" then
+            prefix = prefix .. " ✓"
+        elseif level == "FAIL" then
+            prefix = prefix .. " ✗"
+        elseif level == "WARN" then
+            prefix = prefix .. " ⚠"
+        elseif level == "INFO" then
+            prefix = prefix .. " ►"
+        end
+        print(prefix .. " " .. tostring(msg))
+    end
 end
 
-local function toast(title, msg, duration)
-    GUI.AddToast(title, msg, duration or 3000, eToastPos.TopRight)
+local function toast(msg, duration)
+    pcall(function()
+        GUI.AddToast(CONFIG.NAME, msg, duration or 3000, eToastPos.TopRight)
+    end)
 end
 
+local function logHeader(text)
+    log("═══════════════════════════════════════════════════════════════")
+    log(" " .. text)
+    log("═══════════════════════════════════════════════════════════════")
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- HTTP FETCHING (Using Cherax Curl API)
+-- ═══════════════════════════════════════════════════════════════════════════
 local ActiveCurls = {}
 
-local function fetchURLSync(url, timeout)
-    timeout = timeout or 5000
-    log("Fetching: " .. url)
+local function fetchURL(url, timeout)
+    timeout = timeout or CONFIG.FETCH_TIMEOUT
     local curl = Curl.Easy()
     table.insert(ActiveCurls, curl)
     curl:Setopt(eCurlOption.CURLOPT_URL, url)
-    curl:Setopt(eCurlOption.CURLOPT_USERAGENT, "JerryScript-Loader/1.0")
+    curl:Setopt(eCurlOption.CURLOPT_USERAGENT, CONFIG.NAME .. "-Loader/" .. CONFIG.VERSION)
+    curl:DisableErrorLog()
     curl:Perform()
     local waited = 0
     while not curl:GetFinished() and waited < timeout do
@@ -37,88 +99,164 @@ local function fetchURLSync(url, timeout)
     if curl:GetFinished() then
         local code, response = curl:GetResponse()
         if code == eCurlCode.CURLE_OK and response and #response > 0 then
-            log("  OK: " .. #response .. " bytes")
-            return response
+            return response, nil
         else
-            log("  FAIL: " .. tostring(code))
+            return nil, "HTTP Error: " .. tostring(code)
         end
     else
-        log("  TIMEOUT")
+        return nil, "Timeout after " .. timeout .. "ms"
     end
-    return nil
 end
 
-local LoadedModules = {}
-local JS = {}
-
-local function loadCode(code, moduleName)
-    if not code then return nil end
-    local fn, err = load(code, moduleName)
-    if fn then
-        local success, result = pcall(fn)
-        if success then return result
-        else log("Error executing " .. moduleName .. ": " .. tostring(result)) end
-    else log("Error parsing " .. moduleName .. ": " .. tostring(err)) end
-    return nil
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CODE EXECUTION
+-- ═══════════════════════════════════════════════════════════════════════════
+local function executeCode(code, name)
+    if not code then return nil, "No code provided" end
+    local fn, parseErr = load(code, name)
+    if not fn then return nil, "Parse error: " .. tostring(parseErr) end
+    local success, result = pcall(fn)
+    if not success then return nil, "Runtime error: " .. tostring(result) end
+    return result, nil
 end
 
-function JS.LoadLib(name)
-    if LoadedModules["libs/" .. name] then return LoadedModules["libs/" .. name] end
+-- ═══════════════════════════════════════════════════════════════════════════
+-- LIBRARY LOADER
+-- ═══════════════════════════════════════════════════════════════════════════
+local LoadedLibs = {}
+
+local function loadLibrary(name)
     local url = GITHUB_RAW .. "libs/" .. name .. ".lua"
-    local code = fetchURLSync(url)
-    if code then
-        local module = loadCode(code, "libs/" .. name)
-        if module then
-            LoadedModules["libs/" .. name] = module
-            return module
-        end
+    log("Loading lib: " .. name, "INFO")
+    local code, fetchErr = fetchURL(url)
+    if not code then
+        log("Failed to fetch " .. name .. ": " .. fetchErr, "FAIL")
+        return nil
     end
-    return nil
+    local result, execErr = executeCode(code, "lib/" .. name)
+    if not result then
+        log("Failed to execute " .. name .. ": " .. execErr, "FAIL")
+        return nil
+    end
+    log("Loaded: " .. name .. " (" .. #code .. " bytes)", "OK")
+    LoadedLibs[name] = result
+    return result
 end
 
-log("═══════════════════════════════════════════════════════════════")
-log(" " .. SCRIPT_NAME .. " Loader v" .. SCRIPT_VERSION)
-log(" GitHub: " .. GITHUB_USERNAME .. "/" .. GITHUB_REPO)
-log("═══════════════════════════════════════════════════════════════")
+local function loadAllLibraries()
+    log("Loading libraries...", "INFO")
+    local loaded, failed = 0, 0
+    for _, libName in ipairs(CONFIG.LIBS) do
+        Script.Yield(25)
+        if loadLibrary(libName) then loaded = loaded + 1
+        else failed = failed + 1 end
+    end
+    log("Libraries: " .. loaded .. " loaded, " .. failed .. " failed")
+    return loaded, failed
+end
 
-toast(SCRIPT_NAME, "Loading from GitHub...", 2000)
+-- ═══════════════════════════════════════════════════════════════════════════
+-- MAIN SCRIPT LOADER
+-- ═══════════════════════════════════════════════════════════════════════════
+local function loadMainScript()
+    local url = GITHUB_RAW .. CONFIG.MAIN_SCRIPT
+    log("Loading main script: " .. CONFIG.MAIN_SCRIPT, "INFO")
+    toast("Downloading JerryScript...", 2000)
+    local code, fetchErr = fetchURL(url)
+    if not code then
+        log("Failed to fetch main script: " .. fetchErr, "FAIL")
+        toast("Failed to download script!", 5000)
+        return false
+    end
+    log("Downloaded: " .. #code .. " bytes", "OK")
+    toast("Initializing...", 1500)
+    local result, execErr = executeCode(code, CONFIG.MAIN_SCRIPT)
+    if execErr then
+        log("Failed to execute main script: " .. execErr, "FAIL")
+        toast("Script error! Check console.", 5000)
+        return false
+    end
+    log("Main script loaded successfully!", "OK")
+    return true
+end
 
-Script.QueueJob(function()
-    Script.Yield(100)
-    JS.Entity = JS.LoadLib("entity")
-    Script.Yield(50)
-    JS.Force = JS.LoadLib("force")
-    Script.Yield(50)
-    JS.PTFX = JS.LoadLib("ptfx")
-    Script.Yield(50)
-    JS.Vehicle = JS.LoadLib("vehicle")
-    Script.Yield(50)
-    JS.Network = JS.LoadLib("network")
-    Script.Yield(50)
+-- ═══════════════════════════════════════════════════════════════════════════
+-- VERSION CHECK
+-- ═══════════════════════════════════════════════════════════════════════════
+local function checkForUpdates()
+    local versionUrl = GITHUB_RAW .. "version.txt"
+    local remoteVersion, err = fetchURL(versionUrl, 3000)
+    if remoteVersion then
+        remoteVersion = remoteVersion:gsub("%s+", "")
+        if remoteVersion ~= CONFIG.VERSION then
+            log("Update available! Current: " .. CONFIG.VERSION .. " -> New: " .. remoteVersion, "WARN")
+            toast("Update available: v" .. remoteVersion, 5000)
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- GLOBAL EXPORTS
+-- ═══════════════════════════════════════════════════════════════════════════
+local JS = {
+    Version = CONFIG.VERSION,
+    Config = CONFIG,
+    Libs = LoadedLibs,
+    Log = log,
+    Toast = toast,
+    Fetch = fetchURL,
+    Execute = executeCode,
+    Entity = nil, Force = nil, PTFX = nil, Vehicle = nil, Network = nil,
+}
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- MAIN INITIALIZATION
+-- ═══════════════════════════════════════════════════════════════════════════
+local function initialize()
+    logHeader(CONFIG.NAME .. " Loader v" .. CONFIG.VERSION)
+    log("GitHub: " .. CONFIG.GITHUB_USER .. "/" .. CONFIG.GITHUB_REPO, "INFO")
+    log("Branch: " .. CONFIG.GITHUB_BRANCH, "INFO")
+    logHeader("Starting...")
+    toast("JerryScript Loader starting...", 2000)
     
-    local loadedCount = 0
-    local libs = {"Entity", "Force", "PTFX", "Vehicle", "Network"}
-    for _, name in ipairs(libs) do
-        if JS[name] then 
-            loadedCount = loadedCount + 1 
-            log(" OK " .. name)
+    if CONFIG.LOAD_LIBS then
+        Script.Yield(100)
+        local loaded, failed = loadAllLibraries()
+        JS.Entity = LoadedLibs.entity
+        JS.Force = LoadedLibs.force
+        JS.PTFX = LoadedLibs.ptfx
+        JS.Vehicle = LoadedLibs.vehicle
+        JS.Network = LoadedLibs.network
+        JS.Libs = LoadedLibs
+    end
+    
+    if CONFIG.LOAD_MAIN then
+        Script.Yield(100)
+        local success = loadMainScript()
+        if success then
+            logHeader("JerryScript Ready!")
+            toast("JerryScript loaded! ✓", 3000)
         else
-            log(" FAIL " .. name)
+            logHeader("Load Failed!")
+            toast("Failed to load JerryScript!", 5000)
         end
     end
     
-    log("═══════════════════════════════════════════════════════════════")
-    log(" Loaded " .. loadedCount .. "/" .. #libs .. " libraries")
-    log("═══════════════════════════════════════════════════════════════")
-    
-    if loadedCount == #libs then
-        toast(SCRIPT_NAME, "All " .. #libs .. " libs loaded!", 3000)
-    else
-        toast(SCRIPT_NAME, loadedCount .. "/" .. #libs .. " libs", 4000)
-    end
+    Script.QueueJob(function()
+        Script.Yield(2000)
+        checkForUpdates()
+    end)
     
     _G.JerryScript = JS
     _G.JS = JS
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- START
+-- ═══════════════════════════════════════════════════════════════════════════
+Script.QueueJob(function()
+    Script.Yield(50)
+    initialize()
 end)
 
 return JS
