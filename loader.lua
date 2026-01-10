@@ -1,162 +1,124 @@
 --[[
     JerryScript Loader - Cherax Edition
-    Loads modules from GitHub for easy updates
-    
-    Usage: Place this file in your Cherax Lua folder
-    It will automatically fetch the latest modules
+    GitHub: https://github.com/jb321-MIA/JerryScript-Cherax
 ]]
 
 local SCRIPT_NAME = "JerryScript"
 local SCRIPT_VERSION = "1.0.0"
-local GITHUB_RAW = "https://raw.githubusercontent.com/YOUR_USERNAME/JerryScript-Cherax/main/"
 
--- ═══════════════════════════════════════════════════════════════════════════
--- LOADER UTILITIES
--- ═══════════════════════════════════════════════════════════════════════════
+local GITHUB_USERNAME = "jb321-MIA"
+local GITHUB_REPO = "JerryScript-Cherax"
+local GITHUB_BRANCH = "main"
+local GITHUB_RAW = "https://raw.githubusercontent.com/" .. GITHUB_USERNAME .. "/" .. GITHUB_REPO .. "/" .. GITHUB_BRANCH .. "/"
 
-local LoadedModules = {}
-
--- Simple logging
 local function log(msg)
     print("[" .. SCRIPT_NAME .. "] " .. tostring(msg))
 end
 
-local function toast(title, msg)
-    GUI.AddToast(title, msg, 3000, eToastPos.TopRight)
+local function toast(title, msg, duration)
+    GUI.AddToast(title, msg, duration or 3000, eToastPos.TopRight)
 end
 
--- HTTP fetch function using Cherax's capabilities
-local function fetchURL(url, callback)
-    -- Cherax doesn't have native HTTP, so we use a workaround
-    -- Option 1: Use Script.HttpGet if available
-    -- Option 2: Cache modules locally after first download
-    
-    -- For now, we'll use local file loading as fallback
+local ActiveCurls = {}
+
+local function fetchURLSync(url, timeout)
+    timeout = timeout or 5000
     log("Fetching: " .. url)
-    
-    -- Try Cherax HTTP if available
-    if Script and Script.HttpGet then
-        Script.HttpGet(url, function(response)
-            if response and response.success then
-                callback(response.body)
-            else
-                log("HTTP fetch failed: " .. url)
-                callback(nil)
-            end
-        end)
-    else
-        -- Fallback: Try to load from local cache
-        log("HTTP not available, using local files")
-        callback(nil)
+    local curl = Curl.Easy()
+    table.insert(ActiveCurls, curl)
+    curl:Setopt(eCurlOption.CURLOPT_URL, url)
+    curl:Setopt(eCurlOption.CURLOPT_USERAGENT, "JerryScript-Loader/1.0")
+    curl:Perform()
+    local waited = 0
+    while not curl:GetFinished() and waited < timeout do
+        Script.Yield(10)
+        waited = waited + 10
     end
-end
-
--- Load and execute Lua code
-local function loadCode(code, moduleName)
-    if not code then return nil end
-    
-    local fn, err = load(code, moduleName)
-    if fn then
-        local success, result = pcall(fn)
-        if success then
-            return result
+    if curl:GetFinished() then
+        local code, response = curl:GetResponse()
+        if code == eCurlCode.CURLE_OK and response and #response > 0 then
+            log("  OK: " .. #response .. " bytes")
+            return response
         else
-            log("Error executing " .. moduleName .. ": " .. tostring(result))
+            log("  FAIL: " .. tostring(code))
         end
     else
-        log("Error loading " .. moduleName .. ": " .. tostring(err))
+        log("  TIMEOUT")
     end
     return nil
 end
 
--- ═══════════════════════════════════════════════════════════════════════════
--- MODULE LOADER
--- ═══════════════════════════════════════════════════════════════════════════
+local LoadedModules = {}
+local JS = {}
 
-local JS = {}  -- Main JerryScript namespace
+local function loadCode(code, moduleName)
+    if not code then return nil end
+    local fn, err = load(code, moduleName)
+    if fn then
+        local success, result = pcall(fn)
+        if success then return result
+        else log("Error executing " .. moduleName .. ": " .. tostring(result)) end
+    else log("Error parsing " .. moduleName .. ": " .. tostring(err)) end
+    return nil
+end
 
--- Load a library
 function JS.LoadLib(name)
-    if LoadedModules["libs/" .. name] then
-        return LoadedModules["libs/" .. name]
-    end
-    
-    log("Loading lib: " .. name)
-    
-    -- Try local file first (for development)
-    local localPath = "JerryScript/libs/" .. name .. ".lua"
-    local f = io.open(localPath, "r")
-    if f then
-        local code = f:read("*all")
-        f:close()
+    if LoadedModules["libs/" .. name] then return LoadedModules["libs/" .. name] end
+    local url = GITHUB_RAW .. "libs/" .. name .. ".lua"
+    local code = fetchURLSync(url)
+    if code then
         local module = loadCode(code, "libs/" .. name)
         if module then
             LoadedModules["libs/" .. name] = module
             return module
         end
     end
-    
-    -- Try GitHub
-    fetchURL(GITHUB_RAW .. "libs/" .. name .. ".lua", function(code)
-        if code then
-            local module = loadCode(code, "libs/" .. name)
-            if module then
-                LoadedModules["libs/" .. name] = module
-            end
-        end
-    end)
-    
-    return LoadedModules["libs/" .. name]
-end
-
--- Load a module
-function JS.LoadModule(name)
-    if LoadedModules["modules/" .. name] then
-        return LoadedModules["modules/" .. name]
-    end
-    
-    log("Loading module: " .. name)
-    
-    -- Try local file first
-    local localPath = "JerryScript/modules/" .. name .. ".lua"
-    local f = io.open(localPath, "r")
-    if f then
-        local code = f:read("*all")
-        f:close()
-        local module = loadCode(code, "modules/" .. name)
-        if module then
-            LoadedModules["modules/" .. name] = module
-            return module
-        end
-    end
-    
     return nil
 end
 
--- ═══════════════════════════════════════════════════════════════════════════
--- INITIALIZATION
--- ═══════════════════════════════════════════════════════════════════════════
-
 log("═══════════════════════════════════════════════════════════════")
 log(" " .. SCRIPT_NAME .. " Loader v" .. SCRIPT_VERSION)
+log(" GitHub: " .. GITHUB_USERNAME .. "/" .. GITHUB_REPO)
 log("═══════════════════════════════════════════════════════════════")
 
--- Load core libraries
-JS.Entity = JS.LoadLib("entity")
-JS.Vehicle = JS.LoadLib("vehicle")
-JS.PTFX = JS.LoadLib("ptfx")
-JS.Network = JS.LoadLib("network")
-JS.Force = JS.LoadLib("force")
+toast(SCRIPT_NAME, "Loading from GitHub...", 2000)
 
--- Load feature modules
-JS.Attackers = JS.LoadModule("attackers")
-JS.Trolling = JS.LoadModule("trolling")
-JS.Crashes = JS.LoadModule("crashes")
-JS.VehicleTrolls = JS.LoadModule("vehicle_trolls")
-
--- Export
-_G.JerryScript = JS
-
-toast(SCRIPT_NAME, "Loader v" .. SCRIPT_VERSION .. " initialized!")
+Script.QueueJob(function()
+    Script.Yield(100)
+    JS.Entity = JS.LoadLib("entity")
+    Script.Yield(50)
+    JS.Force = JS.LoadLib("force")
+    Script.Yield(50)
+    JS.PTFX = JS.LoadLib("ptfx")
+    Script.Yield(50)
+    JS.Vehicle = JS.LoadLib("vehicle")
+    Script.Yield(50)
+    JS.Network = JS.LoadLib("network")
+    Script.Yield(50)
+    
+    local loadedCount = 0
+    local libs = {"Entity", "Force", "PTFX", "Vehicle", "Network"}
+    for _, name in ipairs(libs) do
+        if JS[name] then 
+            loadedCount = loadedCount + 1 
+            log(" OK " .. name)
+        else
+            log(" FAIL " .. name)
+        end
+    end
+    
+    log("═══════════════════════════════════════════════════════════════")
+    log(" Loaded " .. loadedCount .. "/" .. #libs .. " libraries")
+    log("═══════════════════════════════════════════════════════════════")
+    
+    if loadedCount == #libs then
+        toast(SCRIPT_NAME, "All " .. #libs .. " libs loaded!", 3000)
+    else
+        toast(SCRIPT_NAME, loadedCount .. "/" .. #libs .. " libs", 4000)
+    end
+    
+    _G.JerryScript = JS
+    _G.JS = JS
+end)
 
 return JS
