@@ -3238,10 +3238,6 @@ FeatureMgr.AddFeature(Utils.Joaat("JS_VehicleJumpForce"), "Vehicle Jump Force", 
     end)
 local vjForce = FeatureMgr.GetFeature(Utils.Joaat("JS_VehicleJumpForce"))
 if vjForce then vjForce:SetLimitValues(5, 50); vjForce:SetValue(15) end
-        SelfSettings.fireBreathScale = f:GetIntValue()
-    end)
-local fbScale = FeatureMgr.GetFeature(Utils.Joaat("JS_FireBreathScale"))
-if fbScale then fbScale:SetLimitValues(1, 30); fbScale:SetValue(3) end
 
 -- Weapon Features
 FeatureMgr.AddFeature(Utils.Joaat("JS_NukeGun"), "Nuke Gun [BROKEN]", eFeatureType.Toggle,
