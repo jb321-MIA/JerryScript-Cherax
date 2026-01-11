@@ -23,7 +23,7 @@ local CONFIG = {
     GITHUB_BRANCH = "main",
     
     -- Files to load
-    MAIN_SCRIPT = "JerryScript_v10_6_DOLOS.lua",
+    MAIN_SCRIPT = "JerryScript_v11_0_DOLOS.lua",
     
     -- Libraries (loaded first, available globally)
     LIBS = {
