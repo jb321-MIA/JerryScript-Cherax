@@ -29,7 +29,7 @@
 -- SCRIPT INFO
 -- ═══════════════════════════════════════════════════════════════════════════
 local SCRIPT_NAME = "JerryScript"
-local SCRIPT_VERSION = "10.6"
+local SCRIPT_VERSION = "11.0"
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- CLEANUP ON RELOAD
@@ -285,6 +285,24 @@ local SelfSettings = {
     fireWingsScale = 3,
     fireBreathEnabled = false,
     fireBreathScale = 3,
+    -- NEW v11.0 features
+    ghostAlpha = 255,           -- 0-255 transparency
+    fullRegen = false,          -- Constant health regeneration
+    superJump = false,          -- Enhanced jump
+    noRagdoll = false,          -- Prevent ragdolling
+    noclip = false,             -- Fly through walls
+    noclipSpeed = 2.0,          -- Noclip movement speed
+    infiniteStamina = false,    -- Never get tired
+}
+
+-- Vehicle Settings (Self)
+local VehicleSelfSettings = {
+    hornBoost = false,
+    hornBoostForce = 50.0,
+    vehicleJump = false,
+    vehicleJumpForce = 15.0,
+    speedBoost = false,
+    speedBoostMult = 2.0,
 }
 
 -- Weapon Settings
@@ -2261,6 +2279,9 @@ end
 -- ENTITY YEET - Nearby entities tornado (uses GetRendered for quick access)
 -- FIXED: Added limits and safer iteration to prevent crashes
 -- ═══════════════════════════════════════════════════════════════════════════
+-- ENTITY YEET - Single-use version of Entity Storm
+-- Gets ALL vehicles and peds from the FULL pool (JerryScript style)
+-- ═══════════════════════════════════════════════════════════════════════════
 
 local function EntityYeet(pid)
     local targetX, targetY, targetZ = getPlayerCoords(pid)
@@ -2269,36 +2290,37 @@ local function EntityYeet(pid)
     local rangeSq = YeetSettings.range * YeetSettings.range
     local mult = YeetSettings.multiplier
     local yeetedCount = 0
-    local maxPerCall = 6  -- Limit to prevent crashes
     
-    -- Tornado angle - increments each call for swirl effect
-    State.tornadoAngle = (State.tornadoAngle or 0) + 0.5
-    if State.tornadoAngle > 6.28 then State.tornadoAngle = 0 end
-    
-    -- Get my vehicle to exclude
+    -- Get my ped and vehicle to exclude
     local myPed = getLocalPlayerPed()
     local myVeh = 0
     if myPed and Natives.InvokeBool(N.IS_PED_IN_ANY_VEHICLE, myPed, true) then
         myVeh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, myPed, false) or 0
     end
     
-    -- Get target's vehicle to exclude
-    local targetPed = getPlayerPed(pid)
-    local targetVeh = 0
-    if targetPed and Natives.InvokeBool(N.IS_PED_IN_ANY_VEHICLE, targetPed, true) then
-        targetVeh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, targetPed, false) or 0
+    -- Build list of player vehicles to exclude
+    local playerVehicles = {}
+    local players = Players.Get(ePlayerListSort.PLAYER_ID, "")
+    if players then
+        for _, otherPid in ipairs(players) do
+            pcall(function()
+                local otherPed = getPlayerPed(otherPid)
+                if otherPed and otherPed ~= 0 then
+                    local otherVeh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, otherPed, false)
+                    if otherVeh and otherVeh ~= 0 then
+                        playerVehicles[otherVeh] = true
+                    end
+                end
+            end)
+        end
     end
     
-    -- Get rendered vehicles (nearby) - safer than full pool
-    local vehicles = PoolMgr.GetRenderedVehicles()
-    if not vehicles then return end
-    
-    for _, vehObj in pairs(vehicles) do
-        if yeetedCount >= maxPerCall then break end
-        
+    -- ═══ ALL VEHICLES FROM FULL POOL ═══
+    local totalVehicles = PoolMgr.GetCurrentVehicleCount() or 0
+    for i = 0, totalVehicles - 1 do
         pcall(function()
-            local handle = GTA.PointerToHandle(vehObj)
-            if handle and handle ~= 0 and handle ~= myVeh and handle ~= targetVeh then
+            local handle = PoolMgr.GetVehicle(i)
+            if handle and handle ~= 0 and handle ~= myVeh and not playerVehicles[handle] then
                 local vx, vy, vz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
                 if vx then
                     local dx = targetX - vx
@@ -2308,16 +2330,12 @@ local function EntityYeet(pid)
                     
                     if distSq < rangeSq and distSq > 25 then
                         if requestControlOfEntity(handle) then
-                            local dist = math.sqrt(distSq)
-                            local towardX = dx / dist
-                            local towardY = dy / dist
-                            local swirlX = -towardY
-                            local swirlY = towardX
-                            
+                            -- EXACT JerryScript formula: direction * multiplier (NO SCALING!)
                             Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
-                                (swirlX * mult * 3) + (towardX * mult), 
-                                (swirlY * mult * 3) + (towardY * mult), 
-                                mult * 2, true, false, true, true)
+                                dx * mult,
+                                dy * mult,
+                                dz * mult,
+                                true, false, true, true)
                             yeetedCount = yeetedCount + 1
                         end
                     end
@@ -2325,41 +2343,92 @@ local function EntityYeet(pid)
             end
         end)
     end
+    
+    -- ═══ ALL PEDS FROM FULL POOL ═══
+    local totalPeds = PoolMgr.GetCurrentPedCount() or 0
+    local targetPed = getPlayerPed(pid)
+    for i = 0, totalPeds - 1 do
+        pcall(function()
+            local handle = PoolMgr.GetPed(i)
+            if handle and handle ~= 0 and handle ~= myPed and handle ~= targetPed then
+                if Natives.InvokeBool(N.IS_PED_A_PLAYER, handle) then return end
+                if Natives.InvokeBool(N.IS_PED_IN_ANY_VEHICLE, handle, true) then return end
+                
+                local px, py, pz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
+                if px then
+                    local dx = targetX - px
+                    local dy = targetY - py
+                    local dz = targetZ - pz
+                    local distSq = dx*dx + dy*dy + dz*dz
+                    
+                    if distSq < rangeSq and distSq > 25 then
+                        if requestControlOfEntity(handle) then
+                            Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
+                                dx * mult,
+                                dy * mult,
+                                dz * mult,
+                                true, false, true, true)
+                            yeetedCount = yeetedCount + 1
+                        end
+                    end
+                end
+            end
+        end)
+    end
+    
+    toast(SCRIPT_NAME, "Yeeted " .. yeetedCount .. " entities!")
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- ENTITY STORM - JERRY SCRIPT STYLE - ABSOLUTELY INSANE VEHICLE SWARM
--- Grabs ALL vehicles from pool and sends them FLYING at target continuously
--- This is the crazy mode - vehicles launch into the air and swarm like bees
+-- ENTITY STORM v11.0 - MASSIVE VEHICLE SWARM
+-- Uses BOTH GetRenderedVehicles (fast) AND full pool iteration (complete)
+-- Exact JerryScript formula: (target - entity) * multiplier
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local function EntityStorm(pid)
     local targetX, targetY, targetZ = getPlayerCoords(pid)
     if not targetX then return end
     
-    local mult = YeetSettings.multiplier
+    local mult = YeetSettings.multiplier  -- Default 5
+    local rangeSq = YeetSettings.range * YeetSettings.range  -- Default 100^2
+    local affectedCount = 0
     
-    -- Get my vehicle to exclude
+    -- Get my ped and vehicle to exclude
     local myPed = getLocalPlayerPed()
     local myVeh = 0
     if myPed and Natives.InvokeBool(N.IS_PED_IN_ANY_VEHICLE, myPed, true) then
         myVeh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, myPed, false) or 0
     end
     
-    -- Get target's vehicle
-    local targetPed = getPlayerPed(pid)
-    local targetVeh = 0
-    if targetPed and Natives.InvokeBool(N.IS_PED_IN_ANY_VEHICLE, targetPed, true) then
-        targetVeh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, targetPed, false) or 0
+    -- Build set of all player vehicles to exclude
+    local playerVehicles = {}
+    local allPlayers = Players.Get(ePlayerListSort.PLAYER_ID, "")
+    if allPlayers then
+        for _, otherPid in ipairs(allPlayers) do
+            pcall(function()
+                local otherPed = getPlayerPed(otherPid)
+                if otherPed and otherPed ~= 0 then
+                    local otherVeh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, otherPed, false)
+                    if otherVeh and otherVeh ~= 0 then
+                        playerVehicles[otherVeh] = true
+                    end
+                end
+            end)
+        end
     end
     
-    -- PHASE 1: Rendered vehicles (nearby) - These get VIOLENT force toward target
-    local vehicles = PoolMgr.GetRenderedVehicles()
-    if vehicles then
-        for _, vehObj in pairs(vehicles) do
+    -- Track which vehicles we've already processed
+    local processedVehicles = {}
+    
+    -- ═══ PHASE 1: RENDERED VEHICLES (fast, reliable) ═══
+    local renderedVehicles = PoolMgr.GetRenderedVehicles()
+    if renderedVehicles then
+        for _, cveh in pairs(renderedVehicles) do
             pcall(function()
-                local handle = GTA.PointerToHandle(vehObj)
-                if handle and handle ~= 0 and handle ~= myVeh and handle ~= targetVeh then
+                local handle = GTA.PointerToHandle(cveh)
+                if handle and handle ~= 0 and handle ~= myVeh and not playerVehicles[handle] then
+                    processedVehicles[handle] = true
+                    
                     local vx, vy, vz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
                     if vx then
                         local dx = targetX - vx
@@ -2367,38 +2436,12 @@ local function EntityStorm(pid)
                         local dz = targetZ - vz
                         local distSq = dx*dx + dy*dy + dz*dz
                         
-                        -- Affect vehicles 5m - 300m away
-                        if distSq < 90000 and distSq > 25 then
+                        if distSq < rangeSq and distSq > 25 then
                             if requestControlOfEntity(handle) then
-                                local dist = math.sqrt(distSq)
-                                local towardX = dx / dist
-                                local towardY = dy / dist
-                                local towardZ = dz / dist
-                                
-                                -- INSANE force - launch vehicles into air toward target
-                                -- Closer = less force (so they orbit), farther = more force (so they fly in)
-                                local distFactor = math.min(dist / 50, 3.0)  -- 0-3x multiplier based on distance
-                                local forceX = towardX * mult * 20 * distFactor
-                                local forceY = towardY * mult * 20 * distFactor
-                                local forceZ = mult * 15 + math.random(5, 15)  -- Strong upward + randomness
-                                
-                                -- Add swirl effect (perpendicular force for circular motion)
-                                local swirlX = -towardY * mult * 5
-                                local swirlY = towardX * mult * 5
-                                
                                 Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
-                                    forceX + swirlX, forceY + swirlY, forceZ, 
+                                    dx * mult, dy * mult, dz * mult,
                                     true, false, true, true)
-                                
-                                -- Also add some rotation for chaos
-                                Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY, handle, 1,
-                                    (math.random() - 0.5) * mult * 5,
-                                    (math.random() - 0.5) * mult * 5,
-                                    0,
-                                    (math.random() - 0.5) * 2,
-                                    (math.random() - 0.5) * 2,
-                                    (math.random() - 0.5) * 2,
-                                    0, false, false, true, false, true)
+                                affectedCount = affectedCount + 1
                             end
                         end
                     end
@@ -2407,37 +2450,336 @@ local function EntityStorm(pid)
         end
     end
     
-    -- PHASE 2: Sample from FULL vehicle pool (gets faraway vehicles too)
+    -- ═══ PHASE 2: FULL VEHICLE POOL (catches distant vehicles) ═══
     local totalVehicles = PoolMgr.GetCurrentVehicleCount() or 0
-    if totalVehicles > 0 then
-        -- Process 10 random vehicles from the pool each tick
-        for attempt = 1, 10 do
-            local i = math.random(0, totalVehicles - 1)
+    for i = 0, totalVehicles - 1 do
+        pcall(function()
+            local handle = PoolMgr.GetVehicle(i)
+            if handle and handle ~= 0 and not processedVehicles[handle] and handle ~= myVeh and not playerVehicles[handle] then
+                local vx, vy, vz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
+                if vx then
+                    local dx = targetX - vx
+                    local dy = targetY - vy
+                    local dz = targetZ - vz
+                    local distSq = dx*dx + dy*dy + dz*dz
+                    
+                    if distSq < rangeSq and distSq > 25 then
+                        if requestControlOfEntity(handle) then
+                            Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
+                                dx * mult, dy * mult, dz * mult,
+                                true, false, true, true)
+                            affectedCount = affectedCount + 1
+                        end
+                    end
+                end
+            end
+        end)
+    end
+    
+    -- ═══ PHASE 3: ALL PEDS (not in vehicles) ═══
+    local renderedPeds = PoolMgr.GetRenderedPeds()
+    if renderedPeds then
+        local targetPed = getPlayerPed(pid)
+        for _, cped in pairs(renderedPeds) do
             pcall(function()
-                local handle = PoolMgr.GetVehicle(i)
-                if handle and handle ~= 0 and handle ~= myVeh and handle ~= targetVeh then
-                    local vx, vy, vz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
-                    if vx then
-                        local dx = targetX - vx
-                        local dy = targetY - vy
-                        local dz = targetZ - vz
-                        local distSq = dx*dx + dy*dy + dz*dz
-                        
-                        -- Far vehicles (100m - 1000m) get MASSIVE force to bring them in
-                        if distSq > 10000 and distSq < 1000000 then
-                            if requestControlOfEntity(handle) then
-                                local dist = math.sqrt(distSq)
-                                local towardX = dx / dist
-                                local towardY = dy / dist
-                                
-                                -- MASSIVE horizontal pull + huge upward force (makes them fly in from distance)
-                                Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
-                                    towardX * mult * 40, 
-                                    towardY * mult * 40, 
-                                    mult * 25,  -- Launch them HIGH
-                                    true, false, true, true)
+                local handle = GTA.PointerToHandle(cped)
+                if handle and handle ~= 0 and handle ~= myPed and handle ~= targetPed then
+                    if not Natives.InvokeBool(N.IS_PED_A_PLAYER, handle) and 
+                       not Natives.InvokeBool(N.IS_PED_IN_ANY_VEHICLE, handle, true) then
+                        local px, py, pz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
+                        if px then
+                            local dx = targetX - px
+                            local dy = targetY - py
+                            local dz = targetZ - pz
+                            local distSq = dx*dx + dy*dy + dz*dz
+                            
+                            if distSq < rangeSq and distSq > 25 then
+                                if requestControlOfEntity(handle) then
+                                    Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
+                                        dx * mult, dy * mult, dz * mult,
+                                        true, false, true, true)
+                                    affectedCount = affectedCount + 1
+                                end
                             end
                         end
+                    end
+                end
+            end)
+        end
+    end
+    
+    -- Debug: Log count occasionally
+    if math.random(1, 20) == 1 then
+        log("Storm affecting " .. affectedCount .. " entities (range=" .. YeetSettings.range .. ", mult=" .. mult .. ")")
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- NEW v11.0 TROLLING FEATURES
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Entity Rain - Drop animals/objects on target
+local RainTargets = {}  -- {pid = {enabled, type}}
+local RainTypes = {
+    {name = "Cats", model = "a_c_cat_01"},
+    {name = "Dogs", model = "a_c_pug"},
+    {name = "Chickens", model = "a_c_hen"},
+    {name = "Chimps", model = "a_c_chimp"},
+    {name = "Rats", model = "a_c_rat"},
+    {name = "Cows", model = "a_c_cow"},
+    {name = "Fish", model = "a_c_fish"},
+    {name = "Pigs", model = "a_c_pig"},
+}
+
+local function EntityRain(pid, rainType)
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    local modelName = RainTypes[rainType] and RainTypes[rainType].model or "a_c_cat_01"
+    local hash = Utils.Joaat(modelName)
+    
+    Script.QueueJob(function()
+        requestModel(hash)
+        
+        -- Random position above target
+        local spawnX = px + math.random(-30, 30)
+        local spawnY = py + math.random(-30, 30)
+        local spawnZ = pz + 30
+        
+        local animal = GTA.CreatePed(hash, 28, spawnX, spawnY, spawnZ, math.random(0, 360), true, true)
+        if animal and animal ~= 0 then
+            table.insert(State.spawnedEntities, animal)
+            Natives.InvokeVoid(N.SET_ENTITY_INVINCIBLE, animal, true)
+        end
+    end)
+end
+
+-- Send to Location - Teleport player's vehicle using force
+local function SendToSky(pid)
+    local veh = getPlayerVehicle(pid)
+    if veh and veh ~= 0 then
+        Script.QueueJob(function()
+            for i = 1, 10 do
+                if requestControlOfEntity(veh) then
+                    Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, veh, 1,
+                        0, 0, 500.0,
+                        true, false, true, true)
+                end
+                Script.Yield(50)
+            end
+        end)
+        toast(SCRIPT_NAME, "Sent to sky!")
+    else
+        toast(SCRIPT_NAME, "Target not in vehicle!")
+    end
+end
+
+-- Vehicle Kill Engine - Destroy their engine
+local function KillEngine(pid)
+    local veh = getPlayerVehicle(pid)
+    if veh and veh ~= 0 then
+        if requestControlOfEntity(veh) then
+            Natives.InvokeVoid(0x45F6D8EEF34ABEF1, veh, -4000.0)  -- SET_VEHICLE_ENGINE_HEALTH
+            toast(SCRIPT_NAME, "Engine destroyed!")
+        end
+    end
+end
+
+-- Pop Tires
+local function PopAllTires(pid)
+    local veh = getPlayerVehicle(pid)
+    if veh and veh ~= 0 then
+        if requestControlOfEntity(veh) then
+            for i = 0, 7 do
+                Natives.InvokeVoid(0xEC6A202EE4960385, veh, i, true, 1000.0)  -- SET_VEHICLE_TYRE_BURST
+            end
+            toast(SCRIPT_NAME, "Tires popped!")
+        end
+    end
+end
+
+-- Hijack Vehicle - Spawn aggressive NPC that steals their car
+local function HijackVehicle(pid)
+    local veh = getPlayerVehicle(pid)
+    if not veh or veh == 0 then
+        toast(SCRIPT_NAME, "Target not in vehicle!")
+        return
+    end
+    
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    Script.QueueJob(function()
+        -- Spawn a thug nearby
+        local hash = Utils.Joaat("g_m_y_ballasout_01")  -- Ballas gang member
+        requestModel(hash)
+        
+        -- Spawn behind the vehicle
+        local jacker = GTA.CreatePed(hash, 4, px - 5, py - 5, pz, 0, true, true)
+        if jacker and jacker ~= 0 then
+            table.insert(State.spawnedEntities, jacker)
+            
+            -- Give weapon
+            Natives.InvokeVoid(0xBF0FD6E56C964FCB, jacker, Utils.Joaat("WEAPON_PISTOL"), 100, true, true) -- GIVE_WEAPON_TO_PED
+            
+            -- Set combat attributes - aggressive
+            Natives.InvokeVoid(0x9F7794730795E019, jacker, 46, true)  -- SET_PED_COMBAT_ATTRIBUTES (BF_AlwaysFight)
+            Natives.InvokeVoid(0x9F7794730795E019, jacker, 5, true)   -- SET_PED_COMBAT_ATTRIBUTES (BF_CanFightArmedPedsWhenNotArmed)
+            
+            -- Task to enter vehicle as driver (kicking out current driver)
+            Natives.InvokeVoid(0xC20E50AA46D09CA8, jacker, veh, -1, -1, 2.0, 1, 0) -- TASK_ENTER_VEHICLE
+            
+            -- Make them flee after getting in
+            Script.QueueJob(function()
+                Script.Yield(5000)  -- Wait 5 seconds
+                if Natives.InvokeBool(N.IS_PED_IN_ANY_VEHICLE, jacker, false) then
+                    -- Drive away fast
+                    local jackerVeh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, jacker, false)
+                    if jackerVeh and jackerVeh ~= 0 then
+                        Natives.InvokeVoid(0x79B0FFC8A27B4C98, jacker, jackerVeh, 200.0, 6)  -- TASK_VEHICLE_DRIVE_WANDER
+                    end
+                end
+            end)
+            
+            toast(SCRIPT_NAME, "Carjacker sent!")
+        end
+    end)
+end
+
+-- Ram Vehicle - Send a fast vehicle to ram into them
+local function RamVehicle(pid)
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    Script.QueueJob(function()
+        -- Spawn a fast car nearby
+        local vehHash = Utils.Joaat("insurgent")  -- Armored truck
+        local pedHash = Utils.Joaat("s_m_y_blackops_01")
+        
+        requestModel(vehHash)
+        requestModel(pedHash)
+        
+        -- Spawn behind target
+        local ramVeh = GTA.SpawnVehicle(vehHash, px - 50, py - 50, pz, 0, true, true)
+        if ramVeh and ramVeh ~= 0 then
+            table.insert(State.spawnedEntities, ramVeh)
+            
+            local driver = GTA.CreatePed(pedHash, 4, px - 50, py - 50, pz, 0, true, true)
+            if driver and driver ~= 0 then
+                table.insert(State.spawnedEntities, driver)
+                
+                -- Put in vehicle
+                Natives.InvokeVoid(N.SET_PED_INTO_VEHICLE, driver, ramVeh, -1)
+                
+                -- Set to ram the target
+                local targetPed = getPlayerPed(pid)
+                if targetPed then
+                    -- Mission to ram target
+                    Natives.InvokeVoid(0x659427E0EF36BCDE, driver, ramVeh, targetPed, 6, 200.0, 786988, 0.0, 0.0, true)  -- TASK_VEHICLE_MISSION_PED_TARGET
+                end
+                
+                toast(SCRIPT_NAME, "Ram vehicle sent!")
+            end
+        end
+    end)
+end
+
+-- Open All Doors
+local function OpenDoors(pid)
+    local veh = getPlayerVehicle(pid)
+    if veh and veh ~= 0 then
+        if requestControlOfEntity(veh) then
+            for i = 0, 5 do
+                Natives.InvokeVoid(0x7C65DAC73C35C862, veh, i, false, false)  -- SET_VEHICLE_DOOR_OPEN
+            end
+            toast(SCRIPT_NAME, "Doors opened!")
+        end
+    end
+end
+
+-- Delete Vehicle
+local function DeleteVehicle(pid)
+    local veh = getPlayerVehicle(pid)
+    if veh and veh ~= 0 then
+        Script.QueueJob(function()
+            for i = 1, 20 do
+                requestControlOfEntity(veh)
+                Script.Yield(10)
+            end
+            Natives.InvokeVoid(N.SET_ENTITY_AS_MISSION_ENTITY, veh, true, true)
+            Natives.InvokeVoid(N.DELETE_ENTITY, veh)
+            toast(SCRIPT_NAME, "Vehicle deleted!")
+        end)
+    end
+end
+
+-- Fake Money Drop (visual only, no actual money)
+local FakeMoneyTargets = {}
+
+local function FakeMoneyTick(pid)
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    -- Spawn pickup that looks like money but isn't
+    local hash = Utils.Joaat("prop_cash_pile_01")
+    requestModel(hash)
+    
+    local obj = GTA.CreateObject(hash, px + math.random(-2, 2), py + math.random(-2, 2), pz + 1, false, true)
+    if obj and obj ~= 0 then
+        table.insert(State.spawnedEntities, obj)
+        -- Delete after 5 seconds
+        Script.QueueJob(function()
+            Script.Yield(5000)
+            pcall(function()
+                requestControlOfEntity(obj)
+                Natives.InvokeVoid(N.DELETE_ENTITY, obj)
+            end)
+        end)
+    end
+end
+
+-- Clone Player (spawn ped that looks like them)
+local function ClonePlayerAppearance(pid)
+    local targetPed = getPlayerPed(pid)
+    if not targetPed or targetPed == 0 then return end
+    
+    local px, py, pz = getPlayerCoords(pid)
+    if not px then return end
+    
+    Script.QueueJob(function()
+        toast(SCRIPT_NAME, "Cloning player...")
+        
+        local clone = Natives.InvokeInt(N.CLONE_PED, targetPed, true, false, true)
+        if clone and clone ~= 0 then
+            table.insert(State.spawnedEntities, clone)
+            Natives.InvokeVoid(N.SET_ENTITY_COORDS_NO_OFFSET, clone, px + 2, py + 2, pz, false, false, false)
+            Natives.InvokeVoid(N.SET_ENTITY_INVINCIBLE, clone, true)
+            toast(SCRIPT_NAME, "Clone created!")
+        else
+            toast(SCRIPT_NAME, "Failed to clone")
+        end
+    end)
+end
+
+-- Freeze Player (freeze their vehicle/ped)
+local FreezeTargets = {}
+
+local function SetPlayerFreeze(pid, freeze)
+    FreezeTargets[pid] = freeze
+    if freeze then
+        toast(SCRIPT_NAME, "Player frozen!")
+    end
+end
+
+local function FreezeTick()
+    for pid, frozen in pairs(FreezeTargets) do
+        if frozen then
+            pcall(function()
+                local veh = getPlayerVehicle(pid)
+                if veh and veh ~= 0 then
+                    if requestControlOfEntity(veh) then
+                        Natives.InvokeVoid(N.FREEZE_ENTITY_POSITION, veh, true)
+                        Natives.InvokeVoid(N.SET_ENTITY_VELOCITY, veh, 0, 0, 0)
                     end
                 end
             end)
@@ -2712,11 +3054,113 @@ Script.RegisterLooped(function()
     Script.Yield(100)
 end)
 
+-- NEW v11.0: Freeze Player tick
+Script.RegisterLooped(function()
+    FreezeTick()
+    Script.Yield(50)
+end)
+
+-- NEW v11.0: Entity Rain tick
+Script.RegisterLooped(function()
+    for playerId, rainType in pairs(RainTargets) do
+        if rainType and rainType > 0 then
+            EntityRain(playerId, rainType)
+        end
+    end
+    Script.Yield(500)  -- Every 500ms spawn an animal
+end)
+
+-- NEW v11.0: Fake Money tick
+Script.RegisterLooped(function()
+    for playerId, active in pairs(FakeMoneyTargets) do
+        if active then
+            FakeMoneyTick(playerId)
+        end
+    end
+    Script.Yield(300)
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- NEW v11.0 SELF FEATURE TICKS
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Full Health Regeneration tick
+Script.RegisterLooped(function()
+    if SelfSettings.fullRegen then
+        pcall(function()
+            local myPed = getLocalPlayerPed()
+            if myPed and myPed ~= 0 then
+                local health = Natives.InvokeInt(0xEEF059FAD016D209, myPed) -- GET_ENTITY_HEALTH
+                local maxHealth = Natives.InvokeInt(0x4700A416E8324EF3, myPed) -- GET_PED_MAX_HEALTH
+                if health < maxHealth then
+                    Natives.InvokeVoid(0x6B76DC1F3AE6E6A3, myPed, math.min(health + 5, maxHealth)) -- SET_ENTITY_HEALTH
+                end
+            end
+        end)
+    end
+    Script.Yield(100)
+end)
+
+-- Infinite Stamina tick
+Script.RegisterLooped(function()
+    if SelfSettings.infiniteStamina then
+        pcall(function()
+            Natives.InvokeVoid(0xC6258F41D86676E0, GTA.GetLocalPlayerId(), 100.0) -- RESTORE_PLAYER_STAMINA
+        end)
+    end
+    Script.Yield(50)
+end)
+
+-- Horn Boost tick
+Script.RegisterLooped(function()
+    if VehicleSelfSettings.hornBoost then
+        pcall(function()
+            local myPed = getLocalPlayerPed()
+            if myPed and Natives.InvokeBool(N.IS_PED_IN_ANY_VEHICLE, myPed, false) then
+                local veh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, myPed, false)
+                if veh and veh ~= 0 then
+                    -- Check if horn is active
+                    local hornActive = Natives.InvokeBool(0x9D6BFC12B05C6121, veh) -- IS_HORN_ACTIVE
+                    if hornActive then
+                        Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, veh, 1,
+                            0, VehicleSelfSettings.hornBoostForce, 0,
+                            true, true, true, true)
+                    end
+                end
+            end
+        end)
+    end
+    Script.Yield(50)
+end)
+
+-- Vehicle Jump tick (press Shift/Spacebar while in vehicle to jump)
+Script.RegisterLooped(function()
+    if VehicleSelfSettings.vehicleJump then
+        pcall(function()
+            local myPed = getLocalPlayerPed()
+            if myPed and Natives.InvokeBool(N.IS_PED_IN_ANY_VEHICLE, myPed, false) then
+                local veh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, myPed, false)
+                if veh and veh ~= 0 then
+                    -- Check if vehicle is grounded and jump key pressed (Shift = 21)
+                    local onGround = Natives.InvokeBool(0x1F5774B1D2889B1B, veh) -- IS_VEHICLE_ON_ALL_WHEELS
+                    local jumpPressed = Natives.InvokeBool(0xF3A21BCD95725A4A, 0, 21) -- IS_DISABLED_CONTROL_JUST_PRESSED
+                    if onGround and jumpPressed then
+                        Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, veh, 1,
+                            0, 0, VehicleSelfSettings.vehicleJumpForce,
+                            true, true, true, true)
+                    end
+                end
+            end
+        end)
+    end
+    Script.Yield(0)  -- Run every frame for responsive jump
+end)
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- FEATURE REGISTRATION - MAIN TAB
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- Self Features
+-- ═══ SELF FEATURES ═══
 FeatureMgr.AddFeature(Utils.Joaat("JS_FireWings"), "Fire Wings", eFeatureType.Toggle,
     "Particle fire wings on your back", function(f)
         SelfSettings.fireWingsEnabled = f:IsToggled()
@@ -2739,6 +3183,61 @@ FeatureMgr.AddFeature(Utils.Joaat("JS_FireBreath"), "Fire Breath", eFeatureType.
 
 FeatureMgr.AddFeature(Utils.Joaat("JS_FireBreathScale"), "Fire Breath Scale", eFeatureType.SliderInt,
     "Size of fire breath (÷10)", function(f)
+        SelfSettings.fireBreathScale = f:GetIntValue()
+    end)
+local fbScale = FeatureMgr.GetFeature(Utils.Joaat("JS_FireBreathScale"))
+if fbScale then fbScale:SetLimitValues(1, 30); fbScale:SetValue(3) end
+
+-- NEW v11.0 Self Features
+FeatureMgr.AddFeature(Utils.Joaat("JS_Ghost"), "Ghost Mode", eFeatureType.SliderInt,
+    "Make yourself transparent (0=invisible, 255=solid)", function(f)
+        SelfSettings.ghostAlpha = f:GetIntValue()
+        local myPed = getLocalPlayerPed()
+        if myPed then
+            Natives.InvokeVoid(N.SET_ENTITY_ALPHA, myPed, SelfSettings.ghostAlpha, false)
+        end
+    end)
+local ghostSlider = FeatureMgr.GetFeature(Utils.Joaat("JS_Ghost"))
+if ghostSlider then ghostSlider:SetLimitValues(0, 255); ghostSlider:SetValue(255) end
+
+FeatureMgr.AddFeature(Utils.Joaat("JS_FullRegen"), "Full Regen", eFeatureType.Toggle,
+    "Continuously regenerate health to full", function(f)
+        SelfSettings.fullRegen = f:IsToggled()
+        if f:IsToggled() then toast(SCRIPT_NAME, "Full Regen ON") end
+    end)
+
+FeatureMgr.AddFeature(Utils.Joaat("JS_InfStamina"), "Infinite Stamina", eFeatureType.Toggle,
+    "Never run out of stamina", function(f)
+        SelfSettings.infiniteStamina = f:IsToggled()
+        if f:IsToggled() then toast(SCRIPT_NAME, "Infinite Stamina ON") end
+    end)
+
+-- ═══ VEHICLE SELF FEATURES ═══
+FeatureMgr.AddFeature(Utils.Joaat("JS_HornBoost"), "Horn Boost", eFeatureType.Toggle,
+    "Press horn to boost forward", function(f)
+        VehicleSelfSettings.hornBoost = f:IsToggled()
+        if f:IsToggled() then toast(SCRIPT_NAME, "Horn Boost ON - Honk to boost!") end
+    end)
+
+FeatureMgr.AddFeature(Utils.Joaat("JS_HornBoostForce"), "Horn Boost Force", eFeatureType.SliderInt,
+    "Force applied when honking", function(f)
+        VehicleSelfSettings.hornBoostForce = f:GetIntValue()
+    end)
+local hbForce = FeatureMgr.GetFeature(Utils.Joaat("JS_HornBoostForce"))
+if hbForce then hbForce:SetLimitValues(10, 200); hbForce:SetValue(50) end
+
+FeatureMgr.AddFeature(Utils.Joaat("JS_VehicleJump"), "Vehicle Jump", eFeatureType.Toggle,
+    "Press Shift while grounded to jump", function(f)
+        VehicleSelfSettings.vehicleJump = f:IsToggled()
+        if f:IsToggled() then toast(SCRIPT_NAME, "Vehicle Jump ON - Press Shift to jump!") end
+    end)
+
+FeatureMgr.AddFeature(Utils.Joaat("JS_VehicleJumpForce"), "Vehicle Jump Force", eFeatureType.SliderInt,
+    "Upward force when jumping", function(f)
+        VehicleSelfSettings.vehicleJumpForce = f:GetIntValue()
+    end)
+local vjForce = FeatureMgr.GetFeature(Utils.Joaat("JS_VehicleJumpForce"))
+if vjForce then vjForce:SetLimitValues(5, 50); vjForce:SetValue(15) end
         SelfSettings.fireBreathScale = f:GetIntValue()
     end)
 local fbScale = FeatureMgr.GetFeature(Utils.Joaat("JS_FireBreathScale"))
@@ -2796,16 +3295,16 @@ FeatureMgr.AddFeature(Utils.Joaat("JS_Notifications"), "Notifications", eFeature
 local notif = FeatureMgr.GetFeature(Utils.Joaat("JS_Notifications"))
 if notif then notif:SetValue(true) end
 
--- YEET Settings
+-- YEET Settings (JerryScript defaults: range 100, multiplier 5)
 FeatureMgr.AddFeature(Utils.Joaat("JS_YeetRange"), "YEET Range", eFeatureType.SliderInt,
-    "Range for Entity YEET/Storm", function(f) YeetSettings.range = f:GetIntValue() end)
+    "Range for Entity YEET/Storm (default 100)", function(f) YeetSettings.range = f:GetIntValue() end)
 local yeetRange = FeatureMgr.GetFeature(Utils.Joaat("JS_YeetRange"))
-if yeetRange then yeetRange:SetLimitValues(10, 200); yeetRange:SetValue(100) end
+if yeetRange then yeetRange:SetLimitValues(10, 1000); yeetRange:SetValue(100) end
 
 FeatureMgr.AddFeature(Utils.Joaat("JS_YeetMult"), "YEET Multiplier", eFeatureType.SliderInt,
-    "Force multiplier for YEET", function(f) YeetSettings.multiplier = f:GetIntValue() end)
+    "Force multiplier (default 5, JerryScript max 1000)", function(f) YeetSettings.multiplier = f:GetIntValue() end)
 local yeetMult = FeatureMgr.GetFeature(Utils.Joaat("JS_YeetMult"))
-if yeetMult then yeetMult:SetLimitValues(1, 20); yeetMult:SetValue(5) end
+if yeetMult then yeetMult:SetLimitValues(1, 1000); yeetMult:SetValue(5) end
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- PLAYER FEATURES (Per-player)
@@ -2940,9 +3439,9 @@ FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_PedLauncher"), "Ped Launcher", eFeat
         if f:IsToggled() then toast(SCRIPT_NAME, "Ped Launcher ON!") end
     end)
 
--- Ragdoll Loop Toggle
-FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_RagdollLoop"), "Ragdoll Loop", eFeatureType.Toggle,
-    "Keep target in permanent ragdoll", function(f)
+-- Ragdoll Loop Toggle (NOTE: Only works if you can get entity control)
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_RagdollLoop"), "Ragdoll Loop [Limited]", eFeatureType.Toggle,
+    "Keep target ragdolling (requires entity control - works best on NPCs)", function(f)
         RagdollTargets[f:GetPlayerIndex()] = f:IsToggled()
         if f:IsToggled() then toast(SCRIPT_NAME, "Ragdoll Loop ON!") end
     end)
@@ -2964,6 +3463,83 @@ FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_PEntityStorm"), "Entity Storm", eFea
         State.entityStormTargets[f:GetPlayerIndex()] = f:IsToggled()
         if f:IsToggled() then toast(SCRIPT_NAME, "Entity Storm ON!") end
     end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- NEW v11.0 TROLLING FEATURES
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Clone Player
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_ClonePlayer"), "Clone Player", eFeatureType.Button,
+    "Spawn ped that looks like target", function(f)
+        ClonePlayerAppearance(f:GetPlayerIndex())
+    end)
+
+-- Send to Sky
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_SendToSky"), "Send to Sky", eFeatureType.Button,
+    "Launch their vehicle into the sky", function(f)
+        SendToSky(f:GetPlayerIndex())
+    end)
+
+-- Kill Engine
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_KillEngine"), "Kill Engine", eFeatureType.Button,
+    "Destroy their vehicle engine", function(f)
+        KillEngine(f:GetPlayerIndex())
+    end)
+
+-- Pop Tires
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_PopTires"), "Pop All Tires", eFeatureType.Button,
+    "Burst all tires on their vehicle", function(f)
+        PopAllTires(f:GetPlayerIndex())
+    end)
+
+-- Open Doors
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_OpenDoors"), "Open Doors", eFeatureType.Button,
+    "Open all doors on their vehicle", function(f)
+        OpenDoors(f:GetPlayerIndex())
+    end)
+
+-- Delete Vehicle
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_DeleteVehicle"), "Delete Vehicle", eFeatureType.Button,
+    "Delete their current vehicle", function(f)
+        DeleteVehicle(f:GetPlayerIndex())
+    end)
+
+-- Hijack Vehicle
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_HijackVehicle"), "Hijack Vehicle", eFeatureType.Button,
+    "Spawn carjacker to steal their car", function(f)
+        HijackVehicle(f:GetPlayerIndex())
+    end)
+
+-- Ram Vehicle
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_RamVehicle"), "Ram Vehicle", eFeatureType.Button,
+    "Send armored truck to ram them", function(f)
+        RamVehicle(f:GetPlayerIndex())
+    end)
+
+-- Freeze Player
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_FreezePlayer"), "Freeze Vehicle", eFeatureType.Toggle,
+    "Freeze their vehicle in place", function(f)
+        SetPlayerFreeze(f:GetPlayerIndex(), f:IsToggled())
+    end)
+
+-- Fake Money
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_FakeMoney"), "Fake Money Drop", eFeatureType.Toggle,
+    "Drop fake money bags (no actual cash)", function(f)
+        FakeMoneyTargets[f:GetPlayerIndex()] = f:IsToggled()
+        if f:IsToggled() then toast(SCRIPT_NAME, "Fake Money ON!") end
+    end)
+
+-- Entity Rain - Dropdown for type selection
+FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_EntityRain"), "Entity Rain", eFeatureType.SliderInt,
+    "Rain animals on target (0=off, 1-8=types)", function(f)
+        RainTargets[f:GetPlayerIndex()] = f:GetIntValue()
+        if f:GetIntValue() > 0 then 
+            local rainName = RainTypes[f:GetIntValue()] and RainTypes[f:GetIntValue()].name or "Unknown"
+            toast(SCRIPT_NAME, "Raining " .. rainName .. "!") 
+        end
+    end)
+-- Entity Rain slider defaults need to be set per-player on first access
+-- Note: Player feature sliders will be set in the initialization loop below
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- DOLOS ATTACKER FEATURES
@@ -3136,10 +3712,21 @@ FeatureMgr.AddPlayerFeature(Utils.Joaat("JS_VehSpin"), "Spin Vehicle", eFeatureT
 
 ClickGUI.AddTab("JerryScript", function()
     if ClickGUI.BeginCustomChildWindow("Self") then
+        ClickGUI.RenderFeature(Utils.Joaat("JS_Ghost"))
+        ClickGUI.RenderFeature(Utils.Joaat("JS_FullRegen"))
+        ClickGUI.RenderFeature(Utils.Joaat("JS_InfStamina"))
         ClickGUI.RenderFeature(Utils.Joaat("JS_FireWings"))
         ClickGUI.RenderFeature(Utils.Joaat("JS_FireWingsScale"))
         ClickGUI.RenderFeature(Utils.Joaat("JS_FireBreath"))
         ClickGUI.RenderFeature(Utils.Joaat("JS_FireBreathScale"))
+        ClickGUI.EndCustomChildWindow()
+    end
+    
+    if ClickGUI.BeginCustomChildWindow("Vehicle (Self)") then
+        ClickGUI.RenderFeature(Utils.Joaat("JS_HornBoost"))
+        ClickGUI.RenderFeature(Utils.Joaat("JS_HornBoostForce"))
+        ClickGUI.RenderFeature(Utils.Joaat("JS_VehicleJump"))
+        ClickGUI.RenderFeature(Utils.Joaat("JS_VehicleJumpForce"))
         ClickGUI.EndCustomChildWindow()
     end
     
@@ -3260,6 +3847,9 @@ ClickGUI.AddPlayerTab("JerryScript", function()
         
         -- ═══ TROLLING TAB ═══
         if ImGui.BeginTabItem("Trolling") then
+            ClickGUI.RenderFeature(Utils.Joaat("JS_ClonePlayer"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_FakeMoney"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_EntityRain"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_PCageStunt"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_TrollChill"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_TrollEarthquake"), pid)
@@ -3267,6 +3857,27 @@ ClickGUI.AddPlayerTab("JerryScript", function()
             ClickGUI.RenderFeature(Utils.Joaat("JS_TrollPtfxType"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_TrollDoritos"), pid)
             ClickGUI.RenderFeature(Utils.Joaat("JS_TrollCorpse"), pid)
+            ImGui.EndTabItem()
+        end
+        
+        -- ═══ VEHICLE CONTROL TAB ═══ (NEW!)
+        if ImGui.BeginTabItem("Veh Ctrl") then
+            ClickGUI.RenderFeature(Utils.Joaat("JS_SendToSky"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_KillEngine"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_PopTires"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_OpenDoors"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_DeleteVehicle"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_HijackVehicle"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_RamVehicle"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_FreezePlayer"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_VehCatapult"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_VehFlip"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_VehSpin"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_PLaunchUp"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_PLaunchDown"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_PToMoon"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_PAnchor"), pid)
+            ClickGUI.RenderFeature(Utils.Joaat("JS_PLockBurnout"), pid)
             ImGui.EndTabItem()
         end
         
@@ -3291,6 +3902,10 @@ EventMgr.RegisterHandler(eLuaEvent.ON_PLAYER_LEFT, function(pid)
     BlackHoleTargets[pid] = nil
     PedLauncherTargets[pid] = nil
     RagdollTargets[pid] = nil
+    -- NEW v11.0 cleanup
+    RainTargets[pid] = nil
+    FakeMoneyTargets[pid] = nil
+    FreezeTargets[pid] = nil
     
     -- Clean up attackers for this player
     deleteAttackers(pid)
@@ -3336,20 +3951,36 @@ Script.QueueJob(function()
             ptfxF:SetLimitValues(1, 8)
             ptfxF:SetValue(2)  -- Default to Fire
         end
+        
+        -- Entity Rain type slider (0-8)
+        local rainF = FeatureMgr.GetFeature(Utils.Joaat("JS_EntityRain"), i)
+        if rainF then
+            rainF:SetLimitValues(0, 8)
+            rainF:SetValue(0)  -- Default to off
+        end
     end
 end)
 
 log("═══════════════════════════════════════════════════════════════")
 log(" " .. SCRIPT_NAME .. " v" .. SCRIPT_VERSION .. " - DOLOS EDITION")
 log("═══════════════════════════════════════════════════════════════")
-log(" FIXES IN 10.6:")
-log("   ✓ IW Crash v2 - Now SAFE (won't crash your game)")
-log("   ✓ Entity Storm - INSANE swirl + launch effect!")
-log("   ✓ Removed duplicate Chaos tab")
-log("   ✓ Attach Crash - Fixed spawn location")
-log("   ✓ Faster Entity Storm tick (50ms)")
-log(" CRASH METHODS: IW, IWv2, Clone, Attach, VehAttach,")
-log("   Ragdoll, Particle, Cage, NetObj, GlitchBomb")
+log(" NEW IN v11.0:")
+log("   ★ SELF: Ghost Mode, Full Regen, Infinite Stamina")
+log("   ★ VEHICLE: Horn Boost, Vehicle Jump")
+log("   ★ TROLLING: Clone Player, Entity Rain (8 types)")
+log("   ★ VEH CTRL: Send to Sky, Kill Engine, Pop Tires,")
+log("              Open Doors, Delete Vehicle, Freeze")
+log("   ★ HIJACK: Carjacker NPC, Ram Vehicle (Insurgent)")
+log("   ★ Fake Money Drop, UI Tab reorganization")
+log(" ")
+log(" FIXED:")
+log("   ✓ Entity Storm - Dual-phase (rendered + full pool)")
+log("   ✓ GET_ENTITY_HEALTH native hash corrected")
+log("   ✓ GetPlayerFeature → GetFeature with index")
+log(" ")
+log(" NOTE: Some features require entity control and may not")
+log("       work on all players (protected menus).")
+log("   ✓ Debug logging for storm entity count")
 log("═══════════════════════════════════════════════════════════════")
 
-GUI.AddToast(SCRIPT_NAME, "v" .. SCRIPT_VERSION .. " - STORM FIXED! 🌪️", 4000, eToastPos.TopRight)
+GUI.AddToast(SCRIPT_NAME, "v" .. SCRIPT_VERSION .. " - MAJOR UPDATE! 🚀", 4000, eToastPos.TopRight)
